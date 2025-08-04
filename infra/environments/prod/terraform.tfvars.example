@@ -1,0 +1,13 @@
+# Production Environment Configuration
+# Copy this file to terraform.tfvars and update values
+
+aws_region = "us-east-1"
+
+# Optional: EC2 Key Pair (not recommended for production)
+key_name = ""
+
+# Required: Email for security alerts
+security_alert_email = "security-team@clinicaltrial.com"
+
+# Required: SNS topic ARN for CloudWatch alarms
+alarm_sns_topic_arn = "arn:aws:sns:us-east-1:123456789012:clinical-trial-alerts"

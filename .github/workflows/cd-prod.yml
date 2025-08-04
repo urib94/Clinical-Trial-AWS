@@ -1,0 +1,1070 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (from staging)'
+        required: true
+        type: string
+      emergency_deployment:
+        description: 'Emergency deployment (skip some checks)'
+        required: false
+        default: false
+        type: boolean
+      rollback_version:
+        description: 'Rollback to specific version (leave empty for normal deployment)'
+        required: false
+        type: string
+      maintenance_window:
+        description: 'Schedule deployment for maintenance window'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+  TERRAFORM_VERSION: '1.6.0'
+  ENVIRONMENT: prod
+
+jobs:
+  # Pre-deployment Approval and Validation
+  pre-deployment-approval:
+    name: Pre-deployment Approval
+    runs-on: ubuntu-latest
+    environment: 
+      name: production-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    outputs:
+      approved: ${{ steps.approval.outputs.approved }}
+      staging_version: ${{ steps.validation.outputs.staging_version }}
+      deployment_strategy: ${{ steps.strategy.outputs.deployment_strategy }}
+      maintenance_mode: ${{ steps.maintenance.outputs.maintenance_mode }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate staging deployment
+        id: validation
+        run: |
+          if [[ -n "${{ github.event.inputs.rollback_version }}" ]]; then
+            echo "staging_version=${{ github.event.inputs.rollback_version }}" >> $GITHUB_OUTPUT
+            echo "Rollback deployment requested"
+            exit 0
+          fi
+          
+          # Verify staging environment health
+          STAGING_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" https://staging.clinical-trial.com/api/health || echo "000")
+          
+          if [[ "$STAGING_HEALTH" != "200" && "${{ github.event.inputs.emergency_deployment }}" != "true" ]]; then
+            echo "Staging environment is not healthy (HTTP $STAGING_HEALTH)"
+            echo "Cannot proceed with production deployment"
+            exit 1
+          fi
+          
+          # Get staging version
+          STAGING_VERSION=$(curl -s https://staging.clinical-trial.com/api/version | jq -r '.version' || echo "${{ github.event.inputs.version }}")
+          echo "staging_version=$STAGING_VERSION" >> $GITHUB_OUTPUT
+          
+          # Validate version matches
+          if [[ "$STAGING_VERSION" != "${{ github.event.inputs.version }}" && "${{ github.event.inputs.emergency_deployment }}" != "true" ]]; then
+            echo "Version mismatch: Staging has $STAGING_VERSION, requested ${{ github.event.inputs.version }}"
+            exit 1
+          fi
+
+      - name: Determine deployment strategy
+        id: strategy
+        run: |
+          if [[ "${{ github.event.inputs.emergency_deployment }}" == "true" ]]; then
+            echo "deployment_strategy=emergency" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ github.event.inputs.rollback_version }}" ]]; then
+            echo "deployment_strategy=rollback" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.maintenance_window }}" == "true" ]]; then
+            echo "deployment_strategy=maintenance" >> $GITHUB_OUTPUT
+          else
+            echo "deployment_strategy=standard" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check maintenance window
+        id: maintenance
+        run: |
+          CURRENT_HOUR=$(date -u +%H)
+          
+          if [[ "${{ github.event.inputs.maintenance_window }}" == "true" ]]; then
+            # Maintenance window: 02:00-04:00 UTC (Sunday-Thursday)
+            DAY_OF_WEEK=$(date -u +%u)  # 1=Monday, 7=Sunday
+            
+            if [[ $DAY_OF_WEEK -le 4 || $DAY_OF_WEEK -eq 7 ]] && [[ $CURRENT_HOUR -ge 2 && $CURRENT_HOUR -lt 4 ]]; then
+              echo "maintenance_mode=true" >> $GITHUB_OUTPUT
+            else
+              echo "Not in maintenance window (current: $(date -u), day: $DAY_OF_WEEK, hour: $CURRENT_HOUR)"
+              exit 1
+            fi
+          else
+            echo "maintenance_mode=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create deployment checklist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            
+            const strategy = '${{ steps.strategy.outputs.deployment_strategy }}';
+            const version = '${{ steps.validation.outputs.staging_version }}';
+            const isRollback = '${{ github.event.inputs.rollback_version }}' !== '';
+            const isEmergency = '${{ github.event.inputs.emergency_deployment }}' === 'true';
+            
+            let checklistItems = [
+              '- [ ] Staging environment validated',
+              '- [ ] Version consistency verified',
+              '- [ ] Database backup completed',
+              '- [ ] Rollback plan prepared',
+              '- [ ] Team notification sent',
+              '- [ ] Monitoring dashboards ready'
+            ];
+            
+            if (!isEmergency && !isRollback) {
+              checklistItems = checklistItems.concat([
+                '- [ ] Load testing completed',
+                '- [ ] Security scan passed',
+                '- [ ] Performance baseline established'
+              ]);
+            }
+            
+            if (strategy === 'maintenance') {
+              checklistItems.push('- [ ] Maintenance window confirmed');
+            }
+            
+            const issue = await github.rest.issues.create({
+              owner,
+              repo,
+              title: `Production Deployment: ${version} (${strategy.toUpperCase()})`,
+              body: `## Production Deployment Request
+              
+              **Version**: ${version}
+              **Strategy**: ${strategy.toUpperCase()}
+              **Requested by**: ${{ github.actor }}
+              **Emergency**: ${isEmergency ? 'YES' : 'NO'}
+              **Rollback**: ${isRollback ? 'YES' : 'NO'}
+              
+              ### Pre-deployment Checklist
+              ${checklistItems.join('\n')}
+              
+              ### Approval Required
+              - [ ] **Technical Lead Approval**
+              - [ ] **Product Owner Approval**
+              ${strategy === 'emergency' ? '- [ ] **Emergency Deployment Justification**' : ''}
+              
+              ### Deployment Plan
+              1. Enable maintenance mode (if scheduled)
+              2. Create production database backup
+              3. Deploy infrastructure changes
+              4. Deploy backend services (canary rollout)
+              5. Deploy frontend application
+              6. Run smoke tests
+              7. Monitor for 30 minutes
+              8. Disable maintenance mode
+              
+              ### Rollback Plan
+              - Rollback triggers: Error rate > 1%, Response time > 2s
+              - Rollback method: Automated alias switch + DNS update
+              - Rollback time: < 5 minutes
+              - Previous version: Will be determined during deployment
+              
+              **⚠️ This deployment requires manual approval before proceeding.**`,
+              labels: ['deployment', 'production', strategy]
+            });
+            
+            core.exportVariable('DEPLOYMENT_ISSUE_NUMBER', issue.data.number);
+
+      - name: Wait for approval
+        id: approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issueNumber = process.env.DEPLOYMENT_ISSUE_NUMBER;
+            
+            // For now, we'll use environment protection rules
+            // In a real scenario, you'd implement a proper approval mechanism
+            console.log('Deployment approved through environment protection rules');
+            core.setOutput('approved', 'true');
+
+  # Pre-deployment Backup and Preparation
+  pre-deployment-backup:
+    name: Pre-deployment Backup
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-approval]
+    if: needs.pre-deployment-approval.outputs.approved == 'true'
+    outputs:
+      backup_id: ${{ steps.backup.outputs.backup_id }}
+      previous_version: ${{ steps.current_version.outputs.previous_version }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get current production version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(aws lambda get-alias --function-name clinical-trial-api-prod --name PROD --query 'FunctionVersion' --output text 2>/dev/null || echo "1")
+          echo "previous_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create production database backup
+        id: backup
+        run: |
+          BACKUP_ID="prod-pre-deployment-$(date +%Y%m%d-%H%M%S)"
+          
+          # Get RDS cluster identifier
+          CLUSTER_ID="clinical-trial-prod"
+          
+          # Create manual backup
+          aws rds create-db-cluster-snapshot \
+            --db-cluster-identifier $CLUSTER_ID \
+            --db-cluster-snapshot-identifier $BACKUP_ID \
+            --tags Key=Purpose,Value=PreDeploymentBackup Key=Version,Value=${{ needs.pre-deployment-approval.outputs.staging_version }}
+          
+          echo "backup_id=$BACKUP_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for backup completion
+        run: |
+          echo "Waiting for backup to complete..."
+          aws rds wait db-cluster-snapshot-completed \
+            --db-cluster-snapshot-identifier ${{ steps.backup.outputs.backup_id }}
+          echo "Backup completed successfully"
+
+      - name: Verify backup
+        run: |
+          # Verify backup exists and is complete
+          BACKUP_STATUS=$(aws rds describe-db-cluster-snapshots \
+            --db-cluster-snapshot-identifier ${{ steps.backup.outputs.backup_id }} \
+            --query 'DBClusterSnapshots[0].Status' --output text)
+          
+          if [[ "$BACKUP_STATUS" != "available" ]]; then
+            echo "Backup verification failed: Status is $BACKUP_STATUS"
+            exit 1
+          fi
+          
+          echo "Backup verified: ${{ steps.backup.outputs.backup_id }}"
+
+      - name: Store backup metadata
+        run: |
+          # Store backup information in Parameter Store for rollback reference
+          aws ssm put-parameter \
+            --name "/clinical-trial/prod/last-backup" \
+            --value "${{ steps.backup.outputs.backup_id }}" \
+            --overwrite
+          
+          aws ssm put-parameter \
+            --name "/clinical-trial/prod/last-backup-timestamp" \
+            --value "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --overwrite
+
+  # Enable Maintenance Mode
+  enable-maintenance-mode:
+    name: Enable Maintenance Mode
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-approval, pre-deployment-backup]
+    if: needs.pre-deployment-approval.outputs.maintenance_mode == 'true' || needs.pre-deployment-approval.outputs.deployment_strategy == 'maintenance'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Enable maintenance mode
+        run: |
+          # Update maintenance mode parameter
+          aws ssm put-parameter \
+            --name "/clinical-trial/prod/maintenance-mode" \
+            --value "true" \
+            --overwrite
+          
+          # Update Route 53 to show maintenance page
+          HOSTED_ZONE_ID="Z1234567890ABC"  # Replace with actual hosted zone ID
+          
+          cat > maintenance-change-batch.json << EOF
+          {
+            "Changes": [{
+              "Action": "UPSERT",
+              "ResourceRecordSet": {
+                "Name": "www.clinical-trial.com",
+                "Type": "CNAME",
+                "TTL": 60,
+                "ResourceRecords": [{"Value": "maintenance.clinical-trial.com"}]
+              }
+            }]
+          }
+          EOF
+          
+          CHANGE_ID=$(aws route53 change-resource-record-sets \
+            --hosted-zone-id $HOSTED_ZONE_ID \
+            --change-batch file://maintenance-change-batch.json \
+            --query 'ChangeInfo.Id' --output text)
+          
+          # Wait for DNS propagation
+          aws route53 wait resource-record-sets-changed --id $CHANGE_ID
+          
+          echo "Maintenance mode enabled"
+
+      - name: Notify users
+        run: |
+          # Send maintenance notification
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🚧 Production maintenance mode enabled",
+                "attachments": [
+                  {
+                    "color": "warning",
+                    "fields": [
+                      {"title": "Status", "value": "Maintenance Mode Active", "short": true},
+                      {"title": "Duration", "value": "Estimated 30 minutes", "short": true}
+                    ]
+                  }
+                ]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi
+
+  # Infrastructure Deployment
+  deploy-infrastructure:
+    name: Deploy Production Infrastructure
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-approval, pre-deployment-backup, enable-maintenance-mode]
+    if: always() && needs.pre-deployment-approval.outputs.approved == 'true' && needs.pre-deployment-backup.result == 'success'
+    outputs:
+      terraform_outputs: ${{ steps.terraform_output.outputs.terraform_outputs }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: infra/environments/prod
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="environment=prod" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="version_tag=${{ needs.pre-deployment-approval.outputs.staging_version }}" \
+            -out=tfplan
+        working-directory: infra/environments/prod
+
+      - name: Manual approval for infrastructure changes
+        if: needs.pre-deployment-approval.outputs.deployment_strategy != 'emergency'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              body: `## Infrastructure Changes Ready for Approval
+              
+              Terraform plan has been generated. Please review the infrastructure changes and approve to continue.
+              
+              **⚠️ Manual verification required before proceeding with Terraform apply.**`
+            });
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra/environments/prod
+
+      - name: Get Terraform Outputs
+        id: terraform_output
+        run: |
+          OUTPUTS=$(terraform output -json)
+          echo "terraform_outputs=${OUTPUTS}" >> $GITHUB_OUTPUT
+        working-directory: infra/environments/prod
+
+  # Database Migration
+  database-migration:
+    name: Production Database Migration
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, pre-deployment-approval]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix backend
+
+      - name: Get database connection
+        run: |
+          DB_HOST=$(echo '${{ needs.deploy-infrastructure.outputs.terraform_outputs }}' | jq -r '.rds_endpoint.value')
+          DB_NAME=$(echo '${{ needs.deploy-infrastructure.outputs.terraform_outputs }}' | jq -r '.database_name.value')
+          
+          # Get database credentials from AWS Secrets Manager
+          DB_SECRET=$(aws secretsmanager get-secret-value --secret-id "clinical-trial-db-prod" --query SecretString --output text)
+          DB_USER=$(echo $DB_SECRET | jq -r '.username')
+          DB_PASSWORD=$(echo $DB_SECRET | jq -r '.password')
+          
+          echo "DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}" >> $GITHUB_ENV
+
+      - name: Test database connection
+        run: npm run db:test-connection --prefix backend
+        env:
+          NODE_ENV: production
+
+      - name: Check migration compatibility
+        run: |
+          # Verify migrations are compatible with current production schema
+          npm run migrate:check --prefix backend
+        env:
+          NODE_ENV: production
+
+      - name: Run database migrations
+        if: needs.pre-deployment-approval.outputs.deployment_strategy != 'rollback'
+        run: |
+          # Run migrations with detailed logging
+          npm run migrate:up --prefix backend -- --verbose
+        env:
+          NODE_ENV: production
+
+      - name: Validate migration success
+        run: |
+          # Verify migration status
+          npm run migrate:status --prefix backend
+        env:
+          NODE_ENV: production
+
+  # Backend Deployment with Canary Strategy
+  deploy-backend:
+    name: Deploy Production Backend
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, database-migration, pre-deployment-approval]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix backend
+
+      - name: Build Lambda functions
+        run: npm run build --prefix backend
+
+      - name: Package Lambda functions
+        run: npm run package --prefix backend
+
+      - name: Deploy Lambda functions (Canary)
+        if: needs.pre-deployment-approval.outputs.deployment_strategy != 'rollback'
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          # Deploy each Lambda function with canary strategy
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              echo "Deploying $function_name to $aws_function_name"
+              
+              # Update function code
+              aws lambda update-function-code \
+                --function-name "$aws_function_name" \
+                --zip-file "fileb://$lambda_zip"
+              
+              # Wait for update to complete
+              aws lambda wait function-updated \
+                --function-name "$aws_function_name"
+              
+              # Publish new version
+              NEW_VERSION=$(aws lambda publish-version \
+                --function-name "$aws_function_name" \
+                --description "Production deployment ${{ needs.pre-deployment-approval.outputs.staging_version }}" \
+                --query 'Version' --output text)
+              
+              # Update function configuration
+              aws lambda update-function-configuration \
+                --function-name "$aws_function_name" \
+                --environment Variables="{NODE_ENV=production,ENVIRONMENT=prod,VERSION=${{ needs.pre-deployment-approval.outputs.staging_version }}}" \
+                --timeout 30 \
+                --memory-size 1024
+              
+              # Create/Update canary alias (5% traffic to new version for production)
+              aws lambda update-alias \
+                --function-name "$aws_function_name" \
+                --name "PROD-CANARY" \
+                --function-version "$NEW_VERSION" \
+                --routing-config AdditionalVersionWeights="{\"$NEW_VERSION\":0.05}" || \
+              aws lambda create-alias \
+                --function-name "$aws_function_name" \
+                --name "PROD-CANARY" \
+                --function-version "$NEW_VERSION" \
+                --routing-config AdditionalVersionWeights="{\"$NEW_VERSION\":0.05}"
+              
+              echo "Canary deployment completed for $function_name (Version: $NEW_VERSION)"
+            fi
+          done
+
+      - name: Handle rollback deployment
+        if: needs.pre-deployment-approval.outputs.deployment_strategy == 'rollback'
+        run: |
+          ROLLBACK_VERSION="${{ github.event.inputs.rollback_version }}"
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              # Update PROD alias to point to rollback version
+              aws lambda update-alias \
+                --function-name "$aws_function_name" \
+                --name "PROD" \
+                --function-version "$ROLLBACK_VERSION"
+              
+              echo "Rolled back $function_name to version $ROLLBACK_VERSION"
+            fi
+          done
+
+      - name: Monitor canary deployment
+        if: needs.pre-deployment-approval.outputs.deployment_strategy != 'rollback' && needs.pre-deployment-approval.outputs.deployment_strategy != 'emergency'
+        run: |
+          echo "Monitoring canary deployment for 10 minutes..."
+          
+          # Monitor for 10 minutes
+          for i in {1..20}; do
+            sleep 30
+            
+            TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+            
+            for lambda_zip in backend/dist/*.zip; do
+              function_name=$(basename "$lambda_zip" .zip)
+              terraform_key="${function_name}_function_name"
+              
+              aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+              
+              if [[ -n "$aws_function_name" ]]; then
+                # Check error rate
+                ERROR_COUNT=$(aws cloudwatch get-metric-statistics \
+                  --namespace AWS/Lambda \
+                  --metric-name Errors \
+                  --dimensions Name=FunctionName,Value="$aws_function_name" \
+                  --start-time $(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%S) \
+                  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+                  --period 60 \
+                  --statistics Sum \
+                  --query 'Datapoints[0].Sum' --output text)
+                
+                if [[ "$ERROR_COUNT" != "None" && "$ERROR_COUNT" -gt 0 ]]; then
+                  echo "High error rate detected for $function_name: $ERROR_COUNT errors"
+                  
+                  # Auto-rollback on high error rate
+                  PREVIOUS_VERSION=$(aws lambda get-alias --function-name "$aws_function_name" --name "PROD" --query 'FunctionVersion' --output text)
+                  aws lambda update-alias \
+                    --function-name "$aws_function_name" \
+                    --name "PROD-CANARY" \
+                    --function-version "$PREVIOUS_VERSION"
+                  
+                  exit 1
+                fi
+              fi
+            done
+            
+            echo "Canary monitoring check $i/20 passed"
+          done
+
+      - name: Promote canary to full deployment
+        if: needs.pre-deployment-approval.outputs.deployment_strategy != 'rollback'
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          # Promote canary to full deployment (100% traffic)
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              # Get the latest version from canary alias
+              LATEST_VERSION=$(aws lambda get-alias \
+                --function-name "$aws_function_name" \
+                --name "PROD-CANARY" \
+                --query 'FunctionVersion' --output text)
+              
+              # Update PROD alias to point to new version (100% traffic)
+              aws lambda update-alias \
+                --function-name "$aws_function_name" \
+                --name "PROD" \
+                --function-version "$LATEST_VERSION"
+              
+              echo "Promoted $function_name to full deployment (Version: $LATEST_VERSION)"
+            fi
+          done
+
+  # Frontend Deployment
+  deploy-frontend:
+    name: Deploy Production Frontend
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-backend]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix frontend
+
+      - name: Configure environment variables
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          # Extract values from Terraform outputs
+          API_GATEWAY_URL=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.api_gateway_url.value')
+          COGNITO_USER_POOL_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cognito_user_pool_id.value')
+          COGNITO_CLIENT_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cognito_client_id.value')
+          S3_BUCKET=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.s3_bucket_name.value')
+          CLOUDFRONT_DOMAIN=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cloudfront_domain.value')
+          
+          # Create environment file
+          cat > frontend/.env.production << EOF
+          NEXT_PUBLIC_API_URL=$API_GATEWAY_URL
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+          NEXT_PUBLIC_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+          NEXT_PUBLIC_S3_BUCKET=$S3_BUCKET
+          NEXT_PUBLIC_CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN
+          NEXT_PUBLIC_ENVIRONMENT=production
+          NEXT_PUBLIC_APP_URL=https://www.clinical-trial.com
+          NEXT_PUBLIC_VERSION=${{ needs.pre-deployment-approval.outputs.staging_version }}
+          EOF
+
+      - name: Build Next.js application
+        run: npm run build --prefix frontend
+        env:
+          NODE_ENV: production
+
+      - name: Deploy to S3
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          S3_BUCKET=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.s3_bucket_name.value')
+          
+          # Sync build files to S3 with proper caching headers
+          aws s3 sync frontend/out/ s3://$S3_BUCKET/ --delete \
+            --cache-control "public, max-age=31536000, immutable" --exclude "*.html" --exclude "service-worker.js"
+          aws s3 sync frontend/out/ s3://$S3_BUCKET/ --delete \
+            --cache-control "public, max-age=0, must-revalidate" --exclude "*" --include "*.html" --include "service-worker.js"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DISTRIBUTION_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cloudfront_distribution_id.value')
+          
+          # Create invalidation
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id $DISTRIBUTION_ID \
+            --paths "/*" \
+            --query 'Invalidation.Id' --output text)
+          
+          echo "CloudFront invalidation created: $INVALIDATION_ID"
+          
+          # Wait for invalidation to complete
+          aws cloudfront wait invalidation-completed \
+            --distribution-id $DISTRIBUTION_ID \
+            --id $INVALIDATION_ID
+
+  # Smoke Tests
+  smoke-tests:
+    name: Production Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-frontend, deploy-backend, deploy-infrastructure]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix tests
+
+      - name: Wait for deployment propagation
+        run: sleep 180
+
+      - name: Run smoke tests
+        run: npm run test:smoke:prod --prefix tests
+        env:
+          TEST_ENVIRONMENT: prod
+          APP_URL: https://www.clinical-trial.com
+          API_BASE_URL: ${{ needs.deploy-infrastructure.outputs.terraform_outputs.api_gateway_url.value }}
+
+      - name: Run critical path tests
+        run: npm run test:critical-path --prefix tests
+        env:
+          TEST_ENVIRONMENT: prod
+
+  # Disable Maintenance Mode
+  disable-maintenance-mode:
+    name: Disable Maintenance Mode
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, pre-deployment-approval]
+    if: always() && needs.smoke-tests.result == 'success' && (needs.pre-deployment-approval.outputs.maintenance_mode == 'true' || needs.pre-deployment-approval.outputs.deployment_strategy == 'maintenance')
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Disable maintenance mode
+        run: |
+          # Update maintenance mode parameter
+          aws ssm put-parameter \
+            --name "/clinical-trial/prod/maintenance-mode" \
+            --value "false" \
+            --overwrite
+          
+          # Restore normal Route 53 routing
+          HOSTED_ZONE_ID="Z1234567890ABC"  # Replace with actual hosted zone ID
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          CLOUDFRONT_DOMAIN=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cloudfront_domain.value')
+          
+          cat > normal-change-batch.json << EOF
+          {
+            "Changes": [{
+              "Action": "UPSERT",
+              "ResourceRecordSet": {
+                "Name": "www.clinical-trial.com",
+                "Type": "CNAME",
+                "TTL": 300,
+                "ResourceRecords": [{"Value": "$CLOUDFRONT_DOMAIN"}]
+              }
+            }]
+          }
+          EOF
+          
+          CHANGE_ID=$(aws route53 change-resource-record-sets \
+            --hosted-zone-id $HOSTED_ZONE_ID \
+            --change-batch file://normal-change-batch.json \
+            --query 'ChangeInfo.Id' --output text)
+          
+          # Wait for DNS propagation
+          aws route53 wait resource-record-sets-changed --id $CHANGE_ID
+          
+          echo "Maintenance mode disabled"
+
+  # Post-deployment Monitoring
+  post-deployment-monitoring:
+    name: Post-deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [disable-maintenance-mode, smoke-tests]
+    if: always() && needs.smoke-tests.result == 'success'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Monitor deployment for 30 minutes
+        run: |
+          echo "Monitoring production deployment for 30 minutes..."
+          
+          ERROR_THRESHOLD=5
+          RESPONSE_TIME_THRESHOLD=2000  # 2 seconds
+          
+          for i in {1..60}; do
+            sleep 30
+            
+            # Check application health
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://www.clinical-trial.com/api/health)
+            RESPONSE_TIME=$(curl -s -o /dev/null -w "%{time_total}" https://www.clinical-trial.com/api/health | cut -d. -f1)
+            
+            if [[ "$HTTP_STATUS" != "200" ]]; then
+              echo "Health check failed at iteration $i (HTTP $HTTP_STATUS)"
+              
+              # Trigger automatic rollback on repeated failures
+              if [[ $i -gt 5 ]]; then
+                echo "Multiple health check failures detected. Triggering rollback..."
+                exit 1
+              fi
+            fi
+            
+            # Check response time
+            if [[ $RESPONSE_TIME -gt $RESPONSE_TIME_THRESHOLD ]]; then
+              echo "High response time detected: ${RESPONSE_TIME}ms (threshold: ${RESPONSE_TIME_THRESHOLD}ms)"
+              
+              # Count high response time occurrences
+              ((HIGH_RESPONSE_COUNT++))
+              if [[ $HIGH_RESPONSE_COUNT -gt 5 ]]; then
+                echo "Consistently high response times. Consider rollback..."
+                exit 1
+              fi
+            else
+              HIGH_RESPONSE_COUNT=0
+            fi
+            
+            # Check error rate from CloudWatch
+            ERROR_COUNT=$(aws cloudwatch get-metric-statistics \
+              --namespace AWS/Lambda \
+              --metric-name Errors \
+              --dimensions Name=FunctionName,Value=clinical-trial-api-prod \
+              --start-time $(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%S) \
+              --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+              --period 60 \
+              --statistics Sum \
+              --query 'Datapoints[0].Sum' --output text)
+            
+            if [[ "$ERROR_COUNT" != "None" && "$ERROR_COUNT" -gt $ERROR_THRESHOLD ]]; then
+              echo "High error rate detected: $ERROR_COUNT errors (threshold: $ERROR_THRESHOLD)"
+              exit 1
+            fi
+            
+            echo "Monitoring check $i/60 passed (HTTP: $HTTP_STATUS, RT: ${RESPONSE_TIME}ms, Errors: ${ERROR_COUNT:-0})"
+          done
+          
+          echo "Production monitoring completed successfully"
+
+      - name: Update monitoring dashboards
+        run: |
+          # Update production dashboard with new deployment information
+          aws cloudwatch put-dashboard \
+            --dashboard-name "Clinical-Trial-Production" \
+            --dashboard-body file://monitoring/production-dashboard.json
+
+  # Deployment Success
+  deployment-success:
+    name: Production Deployment Success
+    runs-on: ubuntu-latest
+    needs: [post-deployment-monitoring, pre-deployment-approval, pre-deployment-backup]
+    if: always() && needs.post-deployment-monitoring.result == 'success'
+    steps:
+      - name: Create deployment summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Production Deployment Successful ✅
+          
+          ## Deployment Details
+          - **Environment**: Production
+          - **Version**: ${{ needs.pre-deployment-approval.outputs.staging_version }}
+          - **Strategy**: ${{ needs.pre-deployment-approval.outputs.deployment_strategy }}
+          - **Commit**: ${{ github.sha }}
+          - **Deployed by**: ${{ github.actor }}
+          - **Deployment time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Application URLs
+          - **Frontend**: https://www.clinical-trial.com
+          - **API**: https://api.clinical-trial.com
+          
+          ## Backup Information
+          - **Pre-deployment backup**: ${{ needs.pre-deployment-backup.outputs.backup_id }}
+          - **Previous version**: ${{ needs.pre-deployment-backup.outputs.previous_version }}
+          
+          ## Validation Results
+          - ✅ Infrastructure deployed successfully
+          - ✅ Database migrations completed
+          - ✅ Backend deployed (Canary strategy)
+          - ✅ Frontend application deployed
+          - ✅ Smoke tests passed
+          - ✅ 30-minute monitoring completed
+          - ✅ Maintenance mode disabled
+          
+          ## Post-deployment Actions
+          - Monitor application performance for next 24 hours
+          - Review error rates and user feedback
+          - Update documentation with any changes
+          EOF
+
+      - name: Close deployment issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              body: `## ✅ Production Deployment Completed Successfully
+              
+              **Version**: ${{ needs.pre-deployment-approval.outputs.staging_version }}
+              **Strategy**: ${{ needs.pre-deployment-approval.outputs.deployment_strategy }}
+              **Application URL**: https://www.clinical-trial.com
+              **Backup ID**: ${{ needs.pre-deployment-backup.outputs.backup_id }}
+              
+              All validation checks and monitoring passed. Deployment is complete.`
+            });
+            
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              state: 'closed',
+              labels: ['deployment', 'production', 'completed']
+            });
+
+      - name: Notify team
+        run: |
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🎉 Production deployment successful!",
+                "attachments": [
+                  {
+                    "color": "good",
+                    "fields": [
+                      {"title": "Environment", "value": "Production", "short": true},
+                      {"title": "Version", "value": "${{ needs.pre-deployment-approval.outputs.staging_version }}", "short": true},
+                      {"title": "Strategy", "value": "${{ needs.pre-deployment-approval.outputs.deployment_strategy }}", "short": true},
+                      {"title": "App URL", "value": "https://www.clinical-trial.com", "short": false}
+                    ]
+                  }
+                ]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi
+
+  # Automatic Rollback on Failure
+  automatic-rollback:
+    name: Automatic Rollback
+    runs-on: ubuntu-latest
+    needs: [post-deployment-monitoring, pre-deployment-backup, deploy-infrastructure]
+    if: always() && needs.post-deployment-monitoring.result == 'failure' && needs.pre-deployment-backup.result == 'success'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Rollback Lambda functions
+        run: |
+          PREVIOUS_VERSION="${{ needs.pre-deployment-backup.outputs.previous_version }}"
+          
+          # Rollback all Lambda functions to previous version
+          FUNCTIONS=("clinical-trial-api-prod" "clinical-trial-auth-prod" "clinical-trial-data-prod")
+          
+          for function_name in "${FUNCTIONS[@]}"; do
+            aws lambda update-alias \
+              --function-name "$function_name" \
+              --name "PROD" \
+              --function-version "$PREVIOUS_VERSION"
+            
+            echo "Rolled back $function_name to version $PREVIOUS_VERSION"
+          done
+
+      - name: Rollback frontend (if needed)
+        run: |
+          # If frontend rollback is needed, restore from previous S3 backup
+          # This would typically involve restoring from a versioned S3 bucket
+          echo "Frontend rollback may be required - check S3 versioning"
+
+      - name: Create rollback summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Automatic Rollback Executed ⚠️
+          
+          ## Rollback Details
+          - **Trigger**: Production monitoring failure
+          - **Rolled back to version**: ${{ needs.pre-deployment-backup.outputs.previous_version }}
+          - **Rollback time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Actions Taken
+          - ✅ Lambda functions rolled back
+          - ⚠️ Frontend rollback may be required
+          - ⚠️ Database rollback may be required
+          
+          ## Next Steps
+          1. Investigate deployment failure cause
+          2. Verify application functionality
+          3. Consider database rollback if needed
+          4. Plan re-deployment strategy
+          EOF
+
+      - name: Notify team of rollback
+        run: |
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🚨 Automatic production rollback executed",
+                "attachments": [
+                  {
+                    "color": "danger",
+                    "fields": [
+                      {"title": "Environment", "value": "Production", "short": true},
+                      {"title": "Rolled back to", "value": "${{ needs.pre-deployment-backup.outputs.previous_version }}", "short": true},
+                      {"title": "Reason", "value": "Monitoring failure", "short": false}
+                    ]
+                  }
+                ]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi

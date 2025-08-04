@@ -1,0 +1,721 @@
+name: Infrastructure Management
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infrastructure.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infrastructure.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Infrastructure action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - 'plan'
+          - 'apply'
+          - 'destroy'
+          - 'validate'
+          - 'import'
+          - 'drift-check'
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - 'dev'
+          - 'staging'
+          - 'prod'
+      auto_approve:
+        description: 'Auto approve apply/destroy (dev only)'
+        required: false
+        default: false
+        type: boolean
+      terraform_args:
+        description: 'Additional Terraform arguments'
+        required: false
+        type: string
+
+env:
+  TERRAFORM_VERSION: '1.6.0'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  # Terraform Validation and Linting
+  terraform-validate:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event.inputs.action == 'validate'
+    outputs:
+      validation_status: ${{ steps.validate.outputs.status }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: |
+          terraform fmt -check -recursive infra/
+          echo "status=success" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Terraform Init (Validation)
+        run: |
+          cd infra/
+          terraform init -backend=false
+
+      - name: Terraform Validate
+        id: validate
+        run: |
+          cd infra/
+          terraform validate
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Initialize TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        id: tflint
+        run: |
+          tflint --recursive infra/
+          echo "status=success" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Run Checkov Security Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra/
+          framework: terraform
+          output_format: cli
+          quiet: true
+          soft_fail: true
+
+      - name: Generate validation report
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo, number } = context.issue;
+            
+            const formatStatus = (status) => status === 'success' ? '✅' : '❌';
+            
+            const comment = `## Terraform Validation Results
+            
+            | Check | Status | Details |
+            |-------|--------|---------|
+            | Format | ${formatStatus('${{ steps.fmt.outputs.status }}')} | Terraform code formatting |
+            | Validate | ${formatStatus('${{ steps.validate.outputs.status }}')} | Terraform configuration validation |
+            | Lint | ${formatStatus('${{ steps.tflint.outputs.status }}')} | TFLint static analysis |
+            | Security | ✅ | Checkov security scan |
+            
+            ${{ steps.fmt.outputs.status != 'success' && '⚠️ **Format issues detected.** Run `terraform fmt -recursive infra/` to fix formatting.' || '' }}
+            ${{ steps.tflint.outputs.status != 'success' && '⚠️ **Linting issues detected.** Check TFLint output for details.' || '' }}
+            
+            ---
+            *This comment is automatically updated on each push*`;
+            
+            // Look for existing comment
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: number,
+            });
+            
+            const existingComment = comments.data.find(
+              comment => comment.body.includes('Terraform Validation Results')
+            );
+            
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: number,
+                body: comment
+              });
+            }
+
+  # Environment-specific Infrastructure Planning
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.event.inputs.action == 'plan' || github.event.inputs.action == 'apply' || github.event.inputs.action == null)
+    strategy:
+      matrix:
+        environment: 
+          - ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'dev') }}
+    environment:
+      name: ${{ matrix.environment }}-plan
+    outputs:
+      plan_status: ${{ steps.plan.outputs.status }}
+      plan_summary: ${{ steps.plan.outputs.summary }}
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          # Generate plan
+          terraform plan \
+            -var="environment=${{ matrix.environment }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            ${{ github.event.inputs.terraform_args || '' }} \
+            -out=tfplan \
+            -detailed-exitcode
+          
+          PLAN_EXIT_CODE=$?
+          
+          # Capture plan output for summary
+          terraform show -no-color tfplan > tfplan.txt
+          
+          # Determine if there are changes
+          if [ $PLAN_EXIT_CODE -eq 2 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ $PLAN_EXIT_CODE -eq 0 ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Generate summary
+          SUMMARY=$(terraform show -json tfplan | jq -r '
+            if .resource_changes then
+              (.resource_changes | group_by(.change.actions[0]) | 
+              map({
+                action: .[0].change.actions[0],
+                count: length
+              }) | 
+              map("\(.action): \(.count)") | join(", "))
+            else
+              "No changes"
+            end
+          ')
+          
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+
+      - name: Generate cost estimate
+        id: cost
+        if: steps.plan.outputs.has_changes == 'true'
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          # Use Infracost if available
+          if command -v infracost &> /dev/null; then
+            infracost breakdown --path=tfplan --format=json > cost-estimate.json
+            MONTHLY_COST=$(jq -r '.projects[0].breakdown.totalMonthlyCost // "0"' cost-estimate.json)
+            echo "monthly_cost=$MONTHLY_COST" >> $GITHUB_OUTPUT
+          else
+            echo "monthly_cost=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload plan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: |
+            infra/environments/${{ matrix.environment }}/tfplan
+            infra/environments/${{ matrix.environment }}/tfplan.txt
+            infra/environments/${{ matrix.environment }}/cost-estimate.json
+          retention-days: 30
+
+      - name: Comment on PR with plan
+        if: github.event_name == 'pull_request' && steps.plan.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo, number } = context.issue;
+            
+            let planOutput = '';
+            try {
+              planOutput = fs.readFileSync('infra/environments/${{ matrix.environment }}/tfplan.txt', 'utf8');
+              // Truncate if too long
+              if (planOutput.length > 65000) {
+                planOutput = planOutput.substring(0, 65000) + '\n... (truncated)';
+              }
+            } catch (error) {
+              planOutput = 'Plan output not available';
+            }
+            
+            const comment = `## Terraform Plan - ${{ matrix.environment }}
+            
+            **Status:** ${{ steps.plan.outputs.status == 'success' && '✅ Success' || '❌ Failed' }}
+            **Changes:** ${{ steps.plan.outputs.summary }}
+            **Cost Impact:** ${{ steps.cost.outputs.monthly_cost != 'unknown' && format('${0}/month', steps.cost.outputs.monthly_cost) || 'Unknown' }}
+            
+            <details>
+            <summary>Show Plan Details</summary>
+            
+            \`\`\`hcl
+            ${planOutput}
+            \`\`\`
+            
+            </details>
+            
+            ---
+            Plan generated for commit: ${context.sha}`;
+            
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: comment
+            });
+
+  # Infrastructure Deployment
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: [terraform-plan]
+    if: |
+      github.event.inputs.action == 'apply' &&
+      needs.terraform-plan.outputs.plan_status == 'success' &&
+      needs.terraform-plan.outputs.has_changes == 'true'
+    strategy:
+      matrix:
+        environment: 
+          - ${{ github.event.inputs.environment }}
+    environment:
+      name: ${{ matrix.environment }}-deploy
+      url: ${{ steps.outputs.outputs.app_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: infra/environments/${{ matrix.environment }}/
+
+      - name: Terraform Init
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform init
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          if [[ "${{ github.event.inputs.auto_approve }}" == "true" && "${{ matrix.environment }}" == "dev" ]]; then
+            terraform apply -auto-approve tfplan
+          else
+            terraform apply tfplan
+          fi
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Get Terraform outputs
+        id: outputs
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          # Get all outputs as JSON
+          OUTPUTS=$(terraform output -json)
+          echo "terraform_outputs=$OUTPUTS" >> $GITHUB_OUTPUT
+          
+          # Extract specific outputs for environment URL
+          if echo "$OUTPUTS" | jq -e '.cloudfront_domain' > /dev/null; then
+            APP_URL="https://$(echo "$OUTPUTS" | jq -r '.cloudfront_domain.value')"
+            echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Store outputs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-${{ matrix.environment }}
+          path: infra/environments/${{ matrix.environment }}/terraform-outputs.json
+          retention-days: 90
+
+      - name: Update infrastructure state
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          # Create infrastructure manifest
+          cat > infrastructure-manifest.json << EOF
+          {
+            "deployment": {
+              "timestamp": "$(date -Iseconds)",
+              "environment": "${{ matrix.environment }}",
+              "terraform_version": "${{ env.TERRAFORM_VERSION }}",
+              "commit_sha": "${{ github.sha }}",
+              "workflow_run": "${{ github.run_id }}",
+              "outputs": ${{ steps.outputs.outputs.terraform_outputs }}
+            }
+          }
+          EOF
+
+      - name: Run post-deployment validation
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          # Validate infrastructure
+          terraform plan -detailed-exitcode -var="environment=${{ matrix.environment }}" -var="region=${{ env.AWS_REGION }}"
+          
+          VALIDATION_EXIT_CODE=$?
+          if [ $VALIDATION_EXIT_CODE -eq 2 ]; then
+            echo "⚠️ Infrastructure drift detected after apply"
+            exit 1
+          elif [ $VALIDATION_EXIT_CODE -ne 0 ]; then
+            echo "❌ Infrastructure validation failed"
+            exit 1
+          fi
+          
+          echo "✅ Infrastructure validation passed"
+
+  # Infrastructure Destruction
+  terraform-destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'destroy'
+    strategy:
+      matrix:
+        environment: 
+          - ${{ github.event.inputs.environment }}
+    environment:
+      name: ${{ matrix.environment }}-destroy
+    steps:
+      - name: Prevent production destruction
+        if: matrix.environment == 'prod'
+        run: |
+          echo "❌ Production environment destruction is not allowed via workflow"
+          exit 1
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform init
+
+      - name: Terraform Destroy Plan
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform plan -destroy -var="environment=${{ matrix.environment }}" -var="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform Destroy
+        if: github.event.inputs.auto_approve == 'true' && matrix.environment == 'dev'
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform destroy -auto-approve -var="environment=${{ matrix.environment }}" -var="region=${{ env.AWS_REGION }}"
+
+  # Infrastructure Drift Detection
+  drift-detection:
+    name: Infrastructure Drift Detection
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'drift-check'
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform init
+
+      - name: Check for drift
+        id: drift
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          
+          terraform plan -detailed-exitcode -var="environment=${{ matrix.environment }}" -var="region=${{ env.AWS_REGION }}" -out=drift-check.plan
+          
+          DRIFT_EXIT_CODE=$?
+          
+          if [ $DRIFT_EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "status=drift" >> $GITHUB_OUTPUT
+            
+            # Generate drift report
+            terraform show -no-color drift-check.plan > drift-report.txt
+          elif [ $DRIFT_EXIT_CODE -eq 0 ]; then
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "status=clean" >> $GITHUB_OUTPUT
+          else
+            echo "drift_detected=unknown" >> $GITHUB_OUTPUT
+            echo "status=error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Upload drift report
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report-${{ matrix.environment }}
+          path: infra/environments/${{ matrix.environment }}/drift-report.txt
+          retention-days: 30
+
+      - name: Create drift issue
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            
+            let driftReport = 'Drift report not available';
+            try {
+              driftReport = fs.readFileSync('infra/environments/${{ matrix.environment }}/drift-report.txt', 'utf8');
+              if (driftReport.length > 65000) {
+                driftReport = driftReport.substring(0, 65000) + '\n... (truncated)';
+              }
+            } catch (error) {
+              console.log('Could not read drift report:', error);
+            }
+            
+            const issue = await github.rest.issues.create({
+              owner,
+              repo,
+              title: `🔄 Infrastructure Drift Detected - ${{ matrix.environment }}`,
+              body: `## Infrastructure Drift Report
+              
+              **Environment:** ${{ matrix.environment }}
+              **Detection Date:** ${new Date().toISOString()}
+              **Status:** Configuration drift detected
+              
+              ### Description
+              Terraform has detected that the actual infrastructure state differs from the expected configuration. This could be due to:
+              
+              - Manual changes made through AWS console
+              - Changes made by other automation tools
+              - Resource modifications outside of Terraform
+              
+              ### Drift Details
+              
+              <details>
+              <summary>Show Drift Report</summary>
+              
+              \`\`\`hcl
+              ${driftReport}
+              \`\`\`
+              
+              </details>
+              
+              ### Action Required
+              
+              1. **Review the drift report** to understand what has changed
+              2. **Determine if changes are intentional** or need to be reverted
+              3. **Update Terraform configuration** if changes should be preserved
+              4. **Apply Terraform configuration** to reconcile state
+              5. **Investigate cause** to prevent future drift
+              
+              ### Resolution Options
+              
+              - **Import changes**: Update Terraform to match current state
+              - **Revert changes**: Apply Terraform to restore expected state
+              - **Manual fix**: Correct specific resources manually then refresh state
+              
+              ⚠️ **Do not ignore drift** - it can lead to unexpected behavior and security issues.`,
+              labels: ['infrastructure', 'drift', 'high-priority', matrix.environment]
+            });
+            
+            console.log('Drift issue created:', issue.data.number);
+
+  # Resource Import
+  terraform-import:
+    name: Terraform Import
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'import'
+    strategy:
+      matrix:
+        environment: 
+          - ${{ github.event.inputs.environment }}
+    environment:
+      name: ${{ matrix.environment }}-import
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd infra/environments/${{ matrix.environment }}
+          terraform init
+
+      - name: Manual import placeholder
+        run: |
+          echo "This job is for manual resource imports"
+          echo "Add specific import commands based on the resources that need to be imported"
+          echo "Example: terraform import aws_s3_bucket.example bucket-name"
+          echo "Terraform args: ${{ github.event.inputs.terraform_args }}"
+
+  # Summary Report
+  infrastructure-summary:
+    name: Infrastructure Summary
+    runs-on: ubuntu-latest
+    needs: [terraform-validate, terraform-plan, terraform-apply]
+    if: always()
+    steps:
+      - name: Generate summary report
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # Infrastructure Management Summary
+          
+          ## Workflow Results
+          
+          | Stage | Status | Details |
+          |-------|--------|---------|
+          | Validation | ${{ needs.terraform-validate.result == 'success' && '✅ Passed' || needs.terraform-validate.result == 'failure' && '❌ Failed' || '⏭️ Skipped' }} | Code validation and linting |
+          | Planning | ${{ needs.terraform-plan.result == 'success' && '✅ Passed' || needs.terraform-plan.result == 'failure' && '❌ Failed' || '⏭️ Skipped' }} | Infrastructure planning |
+          | Deployment | ${{ needs.terraform-apply.result == 'success' && '✅ Passed' || needs.terraform-apply.result == 'failure' && '❌ Failed' || '⏭️ Skipped' }} | Infrastructure deployment |
+          
+          ## Plan Summary
+          ${{ needs.terraform-plan.outputs.has_changes == 'true' && format('**Changes detected:** {0}', needs.terraform-plan.outputs.plan_summary) || '**No changes** detected in infrastructure' }}
+          
+          ## Next Steps
+          ${{ needs.terraform-apply.result == 'success' && '- ✅ Infrastructure deployment completed successfully' || '' }}
+          ${{ needs.terraform-apply.result == 'failure' && '- ❌ Infrastructure deployment failed - check logs for details' || '' }}
+          ${{ needs.terraform-plan.outputs.has_changes == 'true' && needs.terraform-apply.result != 'success' && '- 🔄 Infrastructure changes pending approval/deployment' || '' }}
+          
+          ## Resources
+          - [Terraform Documentation](https://www.terraform.io/docs)
+          - [AWS Provider Documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+          - [Infrastructure Security Best Practices](../docs/security/infrastructure-security.md)
+          EOF
+
+      - name: Notify on failure
+        if: contains(needs.*.result, 'failure')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            
+            // Only create issue for infrastructure failures on main branch
+            if (context.ref === 'refs/heads/main') {
+              const issue = await github.rest.issues.create({
+                owner,
+                repo,
+                title: `🏗️ Infrastructure Workflow Failed - ${new Date().toISOString().split('T')[0]}`,
+                body: `## Infrastructure Workflow Failure
+                
+                **Branch:** ${context.ref}
+                **Commit:** ${context.sha}
+                **Workflow:** ${context.workflow}
+                **Run ID:** ${context.runId}
+                
+                ### Failed Jobs
+                - Validation: ${{ needs.terraform-validate.result }}
+                - Planning: ${{ needs.terraform-plan.result }}
+                - Deployment: ${{ needs.terraform-apply.result }}
+                
+                ### Action Required
+                1. Review the workflow logs for specific error details
+                2. Check Terraform configuration for syntax or logic errors
+                3. Verify AWS permissions and resource quotas
+                4. Fix issues and re-run the workflow
+                
+                ### Debug Information
+                - Check the Actions tab for detailed logs
+                - Review Terraform plan output for resource conflicts
+                - Verify environment-specific variables and secrets
+                
+                **This issue requires immediate attention to maintain infrastructure stability.**`,
+                labels: ['infrastructure', 'failure', 'high-priority']
+              });
+            }

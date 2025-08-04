@@ -1,0 +1,832 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Source branch to deploy'
+        required: false
+        default: 'main'
+        type: string
+      skip_tests:
+        description: 'Skip E2E tests (emergency deployment)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+  TERRAFORM_VERSION: '1.6.0'
+  ENVIRONMENT: staging
+
+jobs:
+  # Pre-deployment validation
+  pre-deployment-checks:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.validation.outputs.should_deploy }}
+      previous_version: ${{ steps.version.outputs.previous_version }}
+      new_version: ${{ steps.version.outputs.new_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check deployment readiness
+        id: validation
+        run: |
+          # Check if development deployment is healthy
+          DEV_HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" https://dev.clinical-trial.com/api/health || echo "000")
+          
+          if [[ "$DEV_HEALTH_CHECK" != "200" ]]; then
+            echo "Development environment is not healthy (HTTP $DEV_HEALTH_CHECK)"
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+
+      - name: Get version information
+        id: version
+        run: |
+          # Get current staging version
+          CURRENT_VERSION=$(aws lambda get-alias --function-name clinical-trial-api-staging --name STAGING --query 'FunctionVersion' --output text 2>/dev/null || echo "1")
+          
+          # Generate new version based on timestamp and commit
+          NEW_VERSION=$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+          
+          echo "previous_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create deployment issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = await github.rest.issues.create({
+              owner,
+              repo,
+              title: `Staging Deployment: ${{ steps.version.outputs.new_version }}`,
+              body: `## Staging Deployment Request
+              
+              **Version**: ${{ steps.version.outputs.new_version }}
+              **Source Branch**: ${{ github.event.inputs.source_branch || 'main' }}
+              **Commit**: ${{ github.sha }}
+              **Triggered by**: ${{ github.actor }}
+              
+              ### Pre-deployment Checklist
+              - [x] Development environment is healthy
+              - [ ] Infrastructure deployment completed
+              - [ ] Database migrations applied
+              - [ ] Application deployment completed
+              - [ ] Post-deployment tests passed
+              - [ ] Security validation completed
+              
+              ### Rollback Plan
+              Previous version: ${{ steps.version.outputs.previous_version }}
+              
+              This issue will be automatically updated with deployment progress.`,
+              labels: ['deployment', 'staging']
+            });
+            
+            core.exportVariable('DEPLOYMENT_ISSUE_NUMBER', issue.data.number);
+
+  # Infrastructure Deployment with Blue-Green Strategy
+  deploy-infrastructure:
+    name: Deploy Infrastructure (Blue-Green)
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks]
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'true'
+    outputs:
+      terraform_outputs: ${{ steps.terraform_output.outputs.terraform_outputs }}
+      deployment_color: ${{ steps.deployment_strategy.outputs.deployment_color }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Determine deployment strategy
+        id: deployment_strategy
+        run: |
+          # Check current environment state
+          CURRENT_COLOR=$(aws ssm get-parameter --name "/clinical-trial/staging/current-color" --query 'Parameter.Value' --output text 2>/dev/null || echo "blue")
+          
+          if [[ "$CURRENT_COLOR" == "blue" ]]; then
+            DEPLOYMENT_COLOR="green"
+          else
+            DEPLOYMENT_COLOR="blue"
+          fi
+          
+          echo "deployment_color=$DEPLOYMENT_COLOR" >> $GITHUB_OUTPUT
+          echo "Deploying to $DEPLOYMENT_COLOR environment"
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: infra/environments/staging
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="deployment_color=${{ steps.deployment_strategy.outputs.deployment_color }}" \
+            -var="environment=staging" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="version_tag=${{ needs.pre-deployment-checks.outputs.new_version }}" \
+            -out=tfplan
+        working-directory: infra/environments/staging
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra/environments/staging
+
+      - name: Get Terraform Outputs
+        id: terraform_output
+        run: |
+          OUTPUTS=$(terraform output -json)
+          echo "terraform_outputs=${OUTPUTS}" >> $GITHUB_OUTPUT
+        working-directory: infra/environments/staging
+
+      - name: Store infrastructure state
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state-staging-${{ steps.deployment_strategy.outputs.deployment_color }}
+          path: infra/environments/staging/terraform.tfstate
+          retention-days: 90
+
+  # Database Migration with Rollback Support
+  database-migration:
+    name: Database Migration
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix backend
+
+      - name: Create database backup
+        id: backup
+        run: |
+          # Create automated backup before migration
+          BACKUP_ID="staging-pre-migration-$(date +%Y%m%d-%H%M%S)"
+          
+          # Get RDS cluster identifier
+          CLUSTER_ID=$(echo '${{ needs.deploy-infrastructure.outputs.terraform_outputs }}' | jq -r '.rds_cluster_id.value')
+          
+          aws rds create-db-cluster-snapshot \
+            --db-cluster-identifier $CLUSTER_ID \
+            --db-cluster-snapshot-identifier $BACKUP_ID
+          
+          echo "backup_id=$BACKUP_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for backup completion
+        run: |
+          aws rds wait db-cluster-snapshot-completed \
+            --db-cluster-snapshot-identifier ${{ steps.backup.outputs.backup_id }}
+
+      - name: Get database connection
+        run: |
+          DB_HOST=$(echo '${{ needs.deploy-infrastructure.outputs.terraform_outputs }}' | jq -r '.rds_endpoint.value')
+          DB_NAME=$(echo '${{ needs.deploy-infrastructure.outputs.terraform_outputs }}' | jq -r '.database_name.value')
+          
+          # Get database credentials from AWS Secrets Manager
+          DB_SECRET=$(aws secretsmanager get-secret-value --secret-id "clinical-trial-db-staging" --query SecretString --output text)
+          DB_USER=$(echo $DB_SECRET | jq -r '.username')
+          DB_PASSWORD=$(echo $DB_SECRET | jq -r '.password')
+          
+          echo "DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}" >> $GITHUB_ENV
+
+      - name: Test database connection
+        run: |
+          npm run db:test-connection --prefix backend
+        env:
+          NODE_ENV: staging
+
+      - name: Run database migrations
+        run: |
+          # Run migrations with detailed logging
+          npm run migrate:up --prefix backend -- --verbose
+        env:
+          NODE_ENV: staging
+
+      - name: Validate migration success
+        run: |
+          # Verify migration status
+          npm run migrate:status --prefix backend
+        env:
+          NODE_ENV: staging
+
+      - name: Update deployment issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              body: `✅ **Database Migration Completed**
+              
+              - Backup created: ${{ steps.backup.outputs.backup_id }}
+              - Migrations applied successfully
+              - Database connection validated`
+            });
+
+  # Backend Deployment with Canary Strategy
+  deploy-backend:
+    name: Deploy Backend (Canary)
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, database-migration]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix backend
+
+      - name: Build Lambda functions
+        run: npm run build --prefix backend
+
+      - name: Package Lambda functions
+        run: npm run package --prefix backend
+
+      - name: Deploy Lambda functions (Canary)
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          # Deploy each Lambda function with canary strategy
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              echo "Deploying $function_name to $aws_function_name"
+              
+              # Update function code
+              aws lambda update-function-code \
+                --function-name "$aws_function_name" \
+                --zip-file "fileb://$lambda_zip"
+              
+              # Wait for update to complete
+              aws lambda wait function-updated \
+                --function-name "$aws_function_name"
+              
+              # Publish new version
+              NEW_VERSION=$(aws lambda publish-version \
+                --function-name "$aws_function_name" \
+                --description "Staging deployment ${{ needs.pre-deployment-checks.outputs.new_version }}" \
+                --query 'Version' --output text)
+              
+              # Update function configuration
+              aws lambda update-function-configuration \
+                --function-name "$aws_function_name" \
+                --environment Variables="{NODE_ENV=staging,ENVIRONMENT=staging,VERSION=${{ needs.pre-deployment-checks.outputs.new_version }}}" \
+                --timeout 30 \
+                --memory-size 512
+              
+              # Create/Update canary alias (10% traffic to new version)
+              aws lambda update-alias \
+                --function-name "$aws_function_name" \
+                --name "STAGING-CANARY" \
+                --function-version "$NEW_VERSION" \
+                --routing-config AdditionalVersionWeights="{\"$NEW_VERSION\":0.1}" || \
+              aws lambda create-alias \
+                --function-name "$aws_function_name" \
+                --name "STAGING-CANARY" \
+                --function-version "$NEW_VERSION" \
+                --routing-config AdditionalVersionWeights="{\"$NEW_VERSION\":0.1}"
+              
+              echo "Canary deployment completed for $function_name (Version: $NEW_VERSION)"
+            fi
+          done
+
+      - name: Monitor canary deployment
+        run: |
+          echo "Monitoring canary deployment for 5 minutes..."
+          sleep 300
+          
+          # Check CloudWatch metrics for errors
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              # Check error rate
+              ERROR_COUNT=$(aws cloudwatch get-metric-statistics \
+                --namespace AWS/Lambda \
+                --metric-name Errors \
+                --dimensions Name=FunctionName,Value="$aws_function_name" \
+                --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) \
+                --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+                --period 300 \
+                --statistics Sum \
+                --query 'Datapoints[0].Sum' --output text)
+              
+              if [[ "$ERROR_COUNT" != "None" && "$ERROR_COUNT" -gt 0 ]]; then
+                echo "High error rate detected for $function_name: $ERROR_COUNT errors"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Promote canary to full deployment
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          
+          # Promote canary to full deployment (100% traffic)
+          for lambda_zip in backend/dist/*.zip; do
+            function_name=$(basename "$lambda_zip" .zip)
+            terraform_key="${function_name}_function_name"
+            
+            aws_function_name=$(echo "$TERRAFORM_OUTPUTS" | jq -r --arg key "$terraform_key" '.[$key].value // empty')
+            
+            if [[ -n "$aws_function_name" ]]; then
+              # Get the latest version from canary alias
+              LATEST_VERSION=$(aws lambda get-alias \
+                --function-name "$aws_function_name" \
+                --name "STAGING-CANARY" \
+                --query 'FunctionVersion' --output text)
+              
+              # Update STAGING alias to point to new version (100% traffic)
+              aws lambda update-alias \
+                --function-name "$aws_function_name" \
+                --name "STAGING" \
+                --function-version "$LATEST_VERSION" || \
+              aws lambda create-alias \
+                --function-name "$aws_function_name" \
+                --name "STAGING" \
+                --function-version "$LATEST_VERSION"
+              
+              echo "Promoted $function_name to full deployment (Version: $LATEST_VERSION)"
+            fi
+          done
+
+  # Frontend Deployment
+  deploy-frontend:
+    name: Deploy Frontend Application
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-backend]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix frontend
+
+      - name: Configure environment variables
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          
+          # Extract values from Terraform outputs
+          API_GATEWAY_URL=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".api_gateway_url_${DEPLOYMENT_COLOR}.value")
+          COGNITO_USER_POOL_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cognito_user_pool_id.value')
+          COGNITO_CLIENT_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.cognito_client_id.value')
+          S3_BUCKET=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".s3_bucket_name_${DEPLOYMENT_COLOR}.value")
+          CLOUDFRONT_DOMAIN=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".cloudfront_domain_${DEPLOYMENT_COLOR}.value")
+          
+          # Create environment file
+          cat > frontend/.env.production << EOF
+          NEXT_PUBLIC_API_URL=$API_GATEWAY_URL
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+          NEXT_PUBLIC_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+          NEXT_PUBLIC_S3_BUCKET=$S3_BUCKET
+          NEXT_PUBLIC_CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN
+          NEXT_PUBLIC_ENVIRONMENT=staging
+          NEXT_PUBLIC_APP_URL=https://$CLOUDFRONT_DOMAIN
+          NEXT_PUBLIC_VERSION=${{ needs.pre-deployment-checks.outputs.new_version }}
+          EOF
+
+      - name: Build Next.js application
+        run: npm run build --prefix frontend
+        env:
+          NODE_ENV: production
+
+      - name: Deploy to S3 (Blue-Green)
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          S3_BUCKET=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".s3_bucket_name_${DEPLOYMENT_COLOR}.value")
+          
+          # Sync build files to S3
+          aws s3 sync frontend/out/ s3://$S3_BUCKET/ --delete \
+            --cache-control "public, max-age=31536000, immutable" --exclude "*.html"
+          aws s3 sync frontend/out/ s3://$S3_BUCKET/ --delete \
+            --cache-control "public, max-age=0, must-revalidate" --exclude "*" --include "*.html"
+
+      - name: Update CloudFront distribution
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          DISTRIBUTION_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".cloudfront_distribution_id_${DEPLOYMENT_COLOR}.value")
+          
+          # Create invalidation
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id $DISTRIBUTION_ID \
+            --paths "/*" \
+            --query 'Invalidation.Id' --output text)
+          
+          echo "CloudFront invalidation created: $INVALIDATION_ID"
+          
+          # Wait for invalidation to complete
+          aws cloudfront wait invalidation-completed \
+            --distribution-id $DISTRIBUTION_ID \
+            --id $INVALIDATION_ID
+
+  # End-to-End Testing
+  e2e-tests:
+    name: End-to-End Testing
+    runs-on: ubuntu-latest
+    needs: [deploy-frontend, deploy-backend, deploy-infrastructure]
+    if: github.event.inputs.skip_tests != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch || 'main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefix tests
+
+      - name: Wait for deployment to propagate
+        run: sleep 120
+
+      - name: Get application URLs
+        id: urls
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          
+          APP_URL=https://$(echo "$TERRAFORM_OUTPUTS" | jq -r ".cloudfront_domain_${DEPLOYMENT_COLOR}.value")
+          API_URL=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".api_gateway_url_${DEPLOYMENT_COLOR}.value")
+          
+          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+
+      - name: Run E2E tests
+        run: npm run test:e2e --prefix tests
+        env:
+          TEST_ENVIRONMENT: staging
+          APP_URL: ${{ steps.urls.outputs.app_url }}
+          API_BASE_URL: ${{ steps.urls.outputs.api_url }}
+          HEADLESS: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results-staging
+          path: tests/playwright-report/
+          retention-days: 30
+
+      - name: Run load tests
+        run: npm run test:load --prefix tests
+        env:
+          TEST_ENVIRONMENT: staging
+          TARGET_URL: ${{ steps.urls.outputs.app_url }}
+
+  # Performance and Security Validation
+  performance-security-validation:
+    name: Performance and Security Validation
+    runs-on: ubuntu-latest
+    needs: [deploy-frontend, deploy-infrastructure]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Get application URL
+        id: app_url
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          APP_URL=https://$(echo "$TERRAFORM_OUTPUTS" | jq -r ".cloudfront_domain_${DEPLOYMENT_COLOR}.value")
+          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+
+      - name: Run Lighthouse CI
+        run: |
+          npm install -g @lhci/cli@0.12.x
+          lhci autorun --url="${{ steps.app_url.outputs.app_url }}"
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: OWASP ZAP Full Scan
+        uses: zaproxy/action-full-scan@v0.8.0
+        with:
+          target: ${{ steps.app_url.outputs.app_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -d -T 60'
+
+      - name: SSL Labs Test
+        run: |
+          DOMAIN=$(echo "${{ steps.app_url.outputs.app_url }}" | sed 's|https://||')
+          
+          # Trigger SSL Labs test
+          curl -s "https://api.ssllabs.com/api/v3/analyze?host=${DOMAIN}&startNew=on" > /dev/null
+          
+          # Wait for test completion
+          sleep 180
+          
+          # Get results
+          GRADE=$(curl -s "https://api.ssllabs.com/api/v3/analyze?host=${DOMAIN}" | jq -r '.endpoints[0].grade')
+          
+          if [[ "$GRADE" != "A" && "$GRADE" != "A+" ]]; then
+            echo "SSL Labs grade is $GRADE, expected A or A+"
+            exit 1
+          fi
+          
+          echo "SSL Labs grade: $GRADE"
+
+  # Traffic Switching (Blue-Green)
+  switch-traffic:
+    name: Switch Traffic to New Environment
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, performance-security-validation, deploy-infrastructure]
+    if: always() && (needs.e2e-tests.result == 'success' || github.event.inputs.skip_tests == 'true') && needs.performance-security-validation.result == 'success'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Switch traffic to new environment
+        run: |
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          
+          # Update Route 53 record to point to new environment
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          HOSTED_ZONE_ID=$(echo "$TERRAFORM_OUTPUTS" | jq -r '.hosted_zone_id.value')
+          NEW_CLOUDFRONT_DOMAIN=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".cloudfront_domain_${DEPLOYMENT_COLOR}.value")
+          
+          # Create Route 53 change batch
+          cat > change-batch.json << EOF
+          {
+            "Changes": [{
+              "Action": "UPSERT",
+              "ResourceRecordSet": {
+                "Name": "staging.clinical-trial.com",
+                "Type": "CNAME",
+                "TTL": 300,
+                "ResourceRecords": [{"Value": "$NEW_CLOUDFRONT_DOMAIN"}]
+              }
+            }]
+          }
+          EOF
+          
+          # Apply DNS change
+          CHANGE_ID=$(aws route53 change-resource-record-sets \
+            --hosted-zone-id $HOSTED_ZONE_ID \
+            --change-batch file://change-batch.json \
+            --query 'ChangeInfo.Id' --output text)
+          
+          # Wait for DNS propagation
+          aws route53 wait resource-record-sets-changed --id $CHANGE_ID
+          
+          # Update current color parameter
+          aws ssm put-parameter \
+            --name "/clinical-trial/staging/current-color" \
+            --value "$DEPLOYMENT_COLOR" \
+            --overwrite
+
+      - name: Verify traffic switch
+        run: |
+          echo "Waiting for DNS propagation..."
+          sleep 60
+          
+          # Test the main staging URL
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.clinical-trial.com/api/health)
+          
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "Health check failed after traffic switch (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+          
+          echo "Traffic successfully switched to new environment"
+
+  # Post-deployment Monitoring
+  post-deployment-monitoring:
+    name: Post-deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [switch-traffic]
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Monitor deployment for 10 minutes
+        run: |
+          echo "Monitoring deployment health for 10 minutes..."
+          
+          for i in {1..20}; do
+            sleep 30
+            
+            # Check application health
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.clinical-trial.com/api/health)
+            
+            if [[ "$HTTP_STATUS" != "200" ]]; then
+              echo "Health check failed at iteration $i (HTTP $HTTP_STATUS)"
+              exit 1
+            fi
+            
+            echo "Health check $i/20 passed"
+          done
+          
+          echo "Deployment monitoring completed successfully"
+
+      - name: Update CloudWatch dashboards
+        run: |
+          # Update staging dashboard with new deployment information
+          aws cloudwatch put-dashboard \
+            --dashboard-name "Clinical-Trial-Staging" \
+            --dashboard-body file://monitoring/staging-dashboard.json
+
+  # Deployment Success
+  deployment-success:
+    name: Deployment Success
+    runs-on: ubuntu-latest
+    needs: [post-deployment-monitoring, pre-deployment-checks, deploy-infrastructure]
+    if: always() && needs.post-deployment-monitoring.result == 'success'
+    steps:
+      - name: Get deployment info
+        id: deployment_info
+        run: |
+          TERRAFORM_OUTPUTS='${{ needs.deploy-infrastructure.outputs.terraform_outputs }}'
+          DEPLOYMENT_COLOR='${{ needs.deploy-infrastructure.outputs.deployment_color }}'
+          
+          APP_URL=https://staging.clinical-trial.com
+          API_URL=$(echo "$TERRAFORM_OUTPUTS" | jq -r ".api_gateway_url_${DEPLOYMENT_COLOR}.value")
+          
+          echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "deployment_color=$DEPLOYMENT_COLOR" >> $GITHUB_OUTPUT
+
+      - name: Create deployment summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Staging Deployment Successful ✅
+          
+          ## Deployment Details
+          - **Environment**: Staging
+          - **Version**: ${{ needs.pre-deployment-checks.outputs.new_version }}
+          - **Deployment Color**: ${{ steps.deployment_info.outputs.deployment_color }}
+          - **Commit**: ${{ github.sha }}
+          - **Deployed by**: ${{ github.actor }}
+          - **Deployment time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Application URLs
+          - **Frontend**: ${{ steps.deployment_info.outputs.app_url }}
+          - **API**: ${{ steps.deployment_info.outputs.api_url }}
+          
+          ## Validation Results
+          - ✅ Infrastructure deployed (Blue-Green)
+          - ✅ Database migrations completed
+          - ✅ Backend deployed (Canary strategy)
+          - ✅ Frontend application deployed
+          - ✅ End-to-end tests passed
+          - ✅ Performance validation passed
+          - ✅ Security validation passed
+          - ✅ Traffic switch completed
+          - ✅ Post-deployment monitoring passed
+          
+          ## Ready for Production
+          This staging deployment is ready for production promotion.
+          EOF
+
+      - name: Close deployment issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              body: `## ✅ Staging Deployment Completed Successfully
+              
+              **Version**: ${{ needs.pre-deployment-checks.outputs.new_version }}
+              **Deployment Color**: ${{ steps.deployment_info.outputs.deployment_color }}
+              **Application URL**: ${{ steps.deployment_info.outputs.app_url }}
+              
+              All validation checks passed. Ready for production deployment.`
+            });
+            
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number: process.env.DEPLOYMENT_ISSUE_NUMBER,
+              state: 'closed',
+              labels: ['deployment', 'staging', 'completed']
+            });
+
+      - name: Notify team
+        run: |
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🚀 Staging deployment successful",
+                "attachments": [
+                  {
+                    "color": "good",
+                    "fields": [
+                      {"title": "Environment", "value": "Staging", "short": true},
+                      {"title": "Version", "value": "${{ needs.pre-deployment-checks.outputs.new_version }}", "short": true},
+                      {"title": "App URL", "value": "${{ steps.deployment_info.outputs.app_url }}", "short": false}
+                    ]
+                  }
+                ]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi

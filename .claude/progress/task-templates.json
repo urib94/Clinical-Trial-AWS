@@ -1,0 +1,224 @@
+{
+  "taskTemplates": {
+    "architecture": {
+      "ARCH-001": {
+        "title": "Design System Architecture Diagram",
+        "description": "Create comprehensive AWS architecture diagram showing services, data flow, and user interactions",
+        "assignedAgent": "System Architect",
+        "supportingAgents": ["Infrastructure Engineer", "Security Engineer"],
+        "priority": "critical",
+        "estimatedHours": 16,
+        "deliverables": [
+          "AWS architecture diagram (draw.io or similar)",
+          "Component descriptions and responsibilities",
+          "Data flow documentation",
+          "Security boundaries identification"
+        ],
+        "acceptanceCriteria": [
+          "All AWS services clearly identified and connected",
+          "Security boundaries and data flow documented",
+          "Cost implications considered and documented",
+          "HIPAA compliance considerations included"
+        ],
+        "dependencies": [],
+        "mcpTools": ["AWS", "Memory", "Brave Search", "Filesystem"]
+      },
+      "ARCH-002": {
+        "title": "Technology Stack Rationale Documentation",
+        "description": "Document and justify technology choices for backend, frontend, and infrastructure",
+        "assignedAgent": "System Architect",
+        "supportingAgents": ["Backend Engineer", "Frontend Developer"],
+        "priority": "high",
+        "estimatedHours": 8,
+        "deliverables": [
+          "Technology selection rationale document",
+          "Comparison matrix of alternatives considered",
+          "Performance and scalability justification",
+          "Healthcare compliance alignment"
+        ],
+        "acceptanceCriteria": [
+          "Clear justification for each technology choice",
+          "Alternatives considered and evaluated",
+          "Alignment with project requirements documented",
+          "Future maintainability considered"
+        ],
+        "dependencies": ["ARCH-001"],
+        "mcpTools": ["Memory", "Brave Search", "Filesystem"]
+      }
+    },
+    "infrastructure": {
+      "INFRA-001": {
+        "title": "Core Network Terraform Module",
+        "description": "Create Terraform module for VPC, subnets, security groups, and NAT configuration",
+        "assignedAgent": "Infrastructure Engineer",
+        "supportingAgents": ["Security Engineer"],
+        "priority": "critical",
+        "estimatedHours": 24,
+        "deliverables": [
+          "VPC Terraform module with multi-AZ setup",
+          "Security groups for each application tier",
+          "NAT instance configuration for cost optimization",
+          "Network ACLs and routing tables"
+        ],
+        "acceptanceCriteria": [
+          "VPC follows AWS best practices",
+          "Private subnets for database and application tiers",
+          "Public subnets only for load balancers",
+          "Cost-optimized NAT instance configuration",
+          "Security groups follow least-privilege principle"
+        ],
+        "dependencies": ["ARCH-001"],
+        "mcpTools": ["AWS", "GitHub", "Memory", "Filesystem"]
+      }
+    },
+    "backend": {
+      "BE-001": {
+        "title": "Database Schema Design",
+        "description": "Design Aurora PostgreSQL schema for clinical trial data with HIPAA compliance",
+        "assignedAgent": "Backend Engineer",
+        "supportingAgents": ["Security Engineer", "System Architect"],
+        "priority": "critical",
+        "estimatedHours": 20,
+        "deliverables": [
+          "PostgreSQL schema with tables and relationships",
+          "Data encryption strategy (column-level)",
+          "Audit logging implementation",
+          "Migration scripts and version control"
+        ],
+        "acceptanceCriteria": [
+          "Schema supports questionnaire versioning",
+          "Column-level encryption for sensitive data",
+          "Comprehensive audit trail implementation",
+          "Performance optimization for 600+ patients",
+          "HIPAA compliance validation"
+        ],
+        "dependencies": ["ARCH-001"],
+        "mcpTools": ["PostgreSQL", "AWS", "Memory", "GitHub"]
+      },
+      "BE-002": {
+        "title": "AWS Cognito Authentication Setup",
+        "description": "Configure Cognito user pools for physicians and patients with MFA",
+        "assignedAgent": "Backend Engineer",
+        "supportingAgents": ["Security Engineer"],
+        "priority": "high",
+        "estimatedHours": 16,
+        "deliverables": [
+          "Cognito user pools configuration",
+          "MFA/2FA implementation",
+          "Google OAuth integration",
+          "Role-based access control setup"
+        ],
+        "acceptanceCriteria": [
+          "Separate user pools for physicians and patients",
+          "MFA required for all users",
+          "Google OAuth working for physician accounts",
+          "JWT token validation implemented",
+          "Password policies enforced"
+        ],
+        "dependencies": ["INFRA-001"],
+        "mcpTools": ["AWS", "GitHub", "Memory"]
+      }
+    },
+    "frontend": {
+      "FE-001": {
+        "title": "Component Architecture Design",
+        "description": "Design React component architecture for dual-portal application",
+        "assignedAgent": "Frontend Developer",
+        "supportingAgents": ["Physician Portal Specialist", "Patient Portal Specialist"],
+        "priority": "high",
+        "estimatedHours": 12,
+        "deliverables": [
+          "Component hierarchy diagram",
+          "Shared component library specification",
+          "State management architecture",
+          "Routing strategy for dual portals"
+        ],
+        "acceptanceCriteria": [
+          "Clear separation between admin and patient portals",
+          "Reusable component library identified",
+          "State management strategy documented",
+          "Accessibility considerations included",
+          "Mobile-first approach documented"
+        ],
+        "dependencies": ["ARCH-001", "BE-001"],
+        "mcpTools": ["Filesystem", "Memory", "Brave Search"]
+      }
+    },
+    "security": {
+      "SEC-001": {
+        "title": "HIPAA Compliance Validation",
+        "description": "Validate architecture and implementation against HIPAA requirements",
+        "assignedAgent": "Security Engineer",
+        "supportingAgents": ["System Architect", "Backend Engineer"],
+        "priority": "critical",
+        "estimatedHours": 16,
+        "deliverables": [
+          "HIPAA compliance checklist completion",
+          "Risk assessment documentation",
+          "Security controls implementation plan",
+          "Audit logging strategy"
+        ],
+        "acceptanceCriteria": [
+          "All HIPAA safeguards addressed",
+          "Data encryption at rest and in transit",
+          "Access controls implemented",
+          "Audit trail comprehensive",
+          "Incident response plan documented"
+        ],
+        "dependencies": ["ARCH-001", "BE-001"],
+        "mcpTools": ["AWS", "Brave Search", "Memory", "GitHub"]
+      }
+    },
+    "testing": {
+      "TEST-001": {
+        "title": "Testing Strategy Development",
+        "description": "Develop comprehensive testing strategy for healthcare application",
+        "assignedAgent": "QA Engineer",
+        "supportingAgents": ["All Development Agents"],
+        "priority": "high",
+        "estimatedHours": 12,
+        "deliverables": [
+          "Testing pyramid strategy",
+          "Test automation framework selection",
+          "Performance testing plan",
+          "Security testing procedures",
+          "Accessibility testing approach"
+        ],
+        "acceptanceCriteria": [
+          "≥85% code coverage target defined",
+          "E2E testing for critical user journeys",
+          "Mobile responsiveness testing included",
+          "Security vulnerability testing planned",
+          "WCAG 2.1 AA compliance testing"
+        ],
+        "dependencies": ["ARCH-001"],
+        "mcpTools": ["GitHub", "Filesystem", "Memory"]
+      }
+    },
+    "deployment": {
+      "DEPLOY-001": {
+        "title": "CI/CD Pipeline Architecture",
+        "description": "Design GitHub Actions workflows for multi-environment deployment",
+        "assignedAgent": "DevOps Engineer",
+        "supportingAgents": ["Infrastructure Engineer", "Security Engineer"],
+        "priority": "high",
+        "estimatedHours": 20,
+        "deliverables": [
+          "GitHub Actions workflow files",
+          "Environment promotion strategy",
+          "Security scanning integration",
+          "Deployment rollback procedures"
+        ],
+        "acceptanceCriteria": [
+          "Automated testing in all workflows",
+          "Security scanning before deployment",
+          "Manual approval for production",
+          "Blue-green deployment for zero downtime",
+          "Rollback procedures tested"
+        ],
+        "dependencies": ["INFRA-001", "SEC-001"],
+        "mcpTools": ["AWS", "GitHub", "PostgreSQL", "Memory"]
+      }
+    }
+  }
+}

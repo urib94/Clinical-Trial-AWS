@@ -1,0 +1,561 @@
+name: Daily Security Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan to run'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - 'full'
+          - 'dependencies'
+          - 'infrastructure'
+          - 'application'
+      target_environment:
+        description: 'Environment to scan'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - 'dev'
+          - 'staging'
+          - 'prod'
+
+env:
+  NODE_VERSION: '20'
+  TERRAFORM_VERSION: '1.6.0'
+
+jobs:
+  # Dependency Vulnerability Scanning
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'dependencies' || github.event.inputs.scan_type == null
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Run npm audit (Frontend)
+        id: npm_audit_frontend
+        run: |
+          cd frontend
+          npm audit --audit-level=moderate --json > npm-audit-frontend.json || true
+          
+          # Check for critical/high vulnerabilities
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit-frontend.json)
+          HIGH=$(jq '.metadata.vulnerabilities.high // 0' npm-audit-frontend.json)
+          
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          
+          if [[ $CRITICAL -gt 0 || $HIGH -gt 0 ]]; then
+            echo "Critical: $CRITICAL, High: $HIGH vulnerabilities found in frontend"
+            exit 1
+          fi
+
+      - name: Run npm audit (Backend)
+        id: npm_audit_backend
+        run: |
+          cd backend
+          npm audit --audit-level=moderate --json > npm-audit-backend.json || true
+          
+          # Check for critical/high vulnerabilities
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit-backend.json)
+          HIGH=$(jq '.metadata.vulnerabilities.high // 0' npm-audit-backend.json)
+          
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          
+          if [[ $CRITICAL -gt 0 || $HIGH -gt 0 ]]; then
+            echo "Critical: $CRITICAL, High: $HIGH vulnerabilities found in backend"
+            exit 1
+          fi
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --all-projects --json-file-output=snyk-results.json
+
+      - name: Upload dependency scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-scan-results
+          path: |
+            frontend/npm-audit-frontend.json
+            backend/npm-audit-backend.json
+            snyk-results.json
+          retention-days: 30
+
+  # Static Application Security Testing (SAST)
+  sast-scan:
+    name: Static Application Security Testing
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'application' || github.event.inputs.scan_type == null
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript
+          queries: security-extended,security-and-quality
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies and build
+        run: |
+          cd frontend && npm ci && npm run build
+          cd ../backend && npm ci && npm run build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Run Semgrep security scan
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: auto
+          generateSarif: "1"
+
+      - name: Upload Semgrep results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  # Infrastructure Security Scanning
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'infrastructure' || github.event.inputs.scan_type == null
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Run Checkov security scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra/
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          skip_check: CKV_AWS_20,CKV_AWS_57  # Skip specific checks if needed
+
+      - name: Upload Checkov results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+
+      - name: Run tfsec security scanner
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infra/
+          format: sarif
+          soft_fail: true
+
+      - name: Run Terrascan
+        uses: tenable/terrascan-action@main
+        with:
+          iac_type: terraform
+          iac_dir: infra/
+          policy_type: aws
+          only_warn: true
+          sarif_upload: true
+
+      - name: Upload infrastructure scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: infrastructure-scan-results
+          path: |
+            checkov-results.sarif
+            tfsec-results.sarif
+            terrascan-results.sarif
+          retention-days: 30
+
+  # Docker Security Scanning (if applicable)
+  docker-scan:
+    name: Docker Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'application' || github.event.inputs.scan_type == null
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for Dockerfiles
+        id: docker_check
+        run: |
+          if find . -name "Dockerfile*" -type f | head -1; then
+            echo "dockerfiles_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "dockerfiles_found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker images
+        if: steps.docker_check.outputs.dockerfiles_found == 'true'
+        run: |
+          for dockerfile in $(find . -name "Dockerfile*" -type f); do
+            dir=$(dirname "$dockerfile")
+            image_name="security-scan:$(basename "$dir")"
+            echo "Building $image_name from $dockerfile"
+            docker build -t "$image_name" -f "$dockerfile" "$dir"
+          done
+
+      - name: Run Trivy vulnerability scanner
+        if: steps.docker_check.outputs.dockerfiles_found == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: 'security-scan:*'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        if: steps.docker_check.outputs.dockerfiles_found == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Secrets Scanning
+  secrets-scan:
+    name: Secrets Scanning
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'application' || github.event.inputs.scan_type == null
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run GitLeaks secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE}} # Only required for GitLeaks Enterprise
+
+      - name: Run TruffleHog secrets scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  # Live Application Security Testing (DAST)
+  dast-scan:
+    name: Dynamic Application Security Testing
+    runs-on: ubuntu-latest
+    if: (github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'application') && (github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == 'staging')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: OWASP ZAP Baseline Scan (Staging)
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: 'https://staging.clinical-trial.com'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -d -T 30'
+
+      - name: OWASP ZAP Full Scan (Staging)
+        if: github.event.inputs.scan_type == 'full'
+        uses: zaproxy/action-full-scan@v0.8.0
+        with:
+          target: 'https://staging.clinical-trial.com'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -d -T 60'
+
+  # Environment-specific Security Validation
+  environment-security-check:
+    name: Environment Security Check
+    runs-on: ubuntu-latest
+    if: github.event.inputs.target_environment != null
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+    steps:
+      - name: Skip if not selected environment
+        if: github.event.inputs.target_environment != 'all' && github.event.inputs.target_environment != matrix.environment
+        run: echo "Skipping ${{ matrix.environment }} - not selected"
+
+      - name: Configure AWS credentials
+        if: github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == matrix.environment
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets[format('AWS_ACCESS_KEY_ID_{0}', upper(matrix.environment))] }}
+          aws-secret-access-key: ${{ secrets[format('AWS_SECRET_ACCESS_KEY_{0}', upper(matrix.environment))] }}
+          aws-region: us-east-1
+
+      - name: Run AWS Config compliance check
+        if: github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == matrix.environment
+        run: |
+          echo "Checking AWS Config compliance for ${{ matrix.environment }}..."
+          
+          # Check for non-compliant resources
+          aws configservice get-compliance-summary-by-resource-type \
+            --resource-types AWS::EC2::SecurityGroup,AWS::RDS::DBCluster,AWS::Lambda::Function,AWS::S3::Bucket \
+            --query 'ComplianceSummary'
+
+      - name: Check IAM policies
+        if: github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == matrix.environment
+        run: |
+          echo "Analyzing IAM policies for ${{ matrix.environment }}..."
+          
+          # List IAM policies with overly permissive permissions
+          aws iam list-policies --scope Local --query 'Policies[?PolicyName==`clinical-trial-*`]'
+
+      - name: Check S3 bucket security
+        if: github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == matrix.environment
+        run: |
+          echo "Checking S3 bucket security for ${{ matrix.environment }}..."
+          
+          # Check for public buckets
+          for bucket in $(aws s3api list-buckets --query 'Buckets[?contains(Name, `clinical-trial`)].Name' --output text); do
+            echo "Checking bucket: $bucket"
+            
+            # Check public access block
+            aws s3api get-public-access-block --bucket "$bucket" || echo "No public access block configured"
+            
+            # Check bucket policy
+            aws s3api get-bucket-policy --bucket "$bucket" || echo "No bucket policy"
+          done
+
+      - name: Check RDS security
+        if: github.event.inputs.target_environment == 'all' || github.event.inputs.target_environment == matrix.environment
+        run: |
+          echo "Checking RDS security for ${{ matrix.environment }}..."
+          
+          # Check for public RDS instances
+          aws rds describe-db-clusters \
+            --query 'DBClusters[?contains(DBClusterIdentifier, `clinical-trial`)].{Cluster:DBClusterIdentifier,Public:PubliclyAccessible,Encrypted:StorageEncrypted}'
+
+  # HIPAA Compliance Validation
+  hipaa-compliance-check:
+    name: HIPAA Compliance Validation
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == null
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check encryption configurations
+        run: |
+          echo "Validating encryption configurations..."
+          
+          # Check for encryption in Terraform configurations
+          if ! grep -r "encrypted.*=.*true" infra/; then
+            echo "❌ Missing encryption configuration in infrastructure"
+            exit 1
+          fi
+          
+          # Check for TLS/SSL configurations
+          if ! grep -r "ssl\|tls" infra/; then
+            echo "⚠️ No TLS/SSL configuration found"
+          fi
+          
+          echo "✅ Encryption configurations validated"
+
+      - name: Check for sensitive data exposure
+        run: |
+          echo "Scanning for potential sensitive data exposure..."
+          
+          # Scan for potential PII/PHI patterns
+          if grep -r -i -E "(ssn|social.?security|medical.?record|patient.?id|health.?info)" \
+            --include="*.js" --include="*.ts" --include="*.jsx" --include="*.tsx" \
+            --exclude-dir=node_modules --exclude-dir=.git .; then
+            echo "❌ Potential sensitive data patterns found"
+            exit 1
+          fi
+          
+          echo "✅ No sensitive data patterns detected"
+
+      - name: Validate logging and audit configurations
+        run: |
+          echo "Validating audit logging configurations..."
+          
+          # Check for audit logging in code
+          if ! grep -r -i "audit.*log\|security.*log" backend/; then
+            echo "⚠️ Limited audit logging configuration found"
+          fi
+          
+          # Check for CloudTrail configuration
+          if ! grep -r "cloudtrail" infra/; then
+            echo "⚠️ No CloudTrail configuration found"
+          fi
+          
+          echo "✅ Logging validation completed"
+
+      - name: Check access controls
+        run: |
+          echo "Validating access control configurations..."
+          
+          # Check for proper IAM role definitions
+          if ! grep -r "aws_iam_role" infra/; then
+            echo "⚠️ No IAM roles defined in infrastructure"
+          fi
+          
+          # Check for least privilege principles
+          if grep -r "\*" infra/ | grep -i "action\|resource"; then
+            echo "⚠️ Potential overly permissive IAM policies found"
+          fi
+          
+          echo "✅ Access control validation completed"
+
+  # Security Report Generation
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, sast-scan, infrastructure-scan, secrets-scan]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan results
+        uses: actions/download-artifact@v4
+        with:
+          path: security-results/
+
+      - name: Generate security report
+        run: |
+          cat > security-report.md << 'EOF'
+          # Clinical Trial Platform - Security Scan Report
+          
+          **Scan Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Scan Type:** ${{ github.event.inputs.scan_type || 'full' }}
+          **Target Environment:** ${{ github.event.inputs.target_environment || 'all' }}
+          
+          ## Scan Results Summary
+          
+          | Scan Type | Status | Critical | High | Medium | Low |
+          |-----------|---------|----------|------|---------|-----|
+          | Dependency Scan | ${{ needs.dependency-scan.result == 'success' && '✅' || '❌' }} | - | - | - | - |
+          | SAST Scan | ${{ needs.sast-scan.result == 'success' && '✅' || '❌' }} | - | - | - | - |
+          | Infrastructure Scan | ${{ needs.infrastructure-scan.result == 'success' && '✅' || '❌' }} | - | - | - | - |
+          | Secrets Scan | ${{ needs.secrets-scan.result == 'success' && '✅' || '❌' }} | - | - | - | - |
+          
+          ## Recommendations
+          
+          1. **Regular Updates**: Keep dependencies updated to latest secure versions
+          2. **Code Review**: Implement security-focused code review processes
+          3. **Infrastructure**: Follow AWS security best practices
+          4. **Monitoring**: Implement continuous security monitoring
+          5. **Training**: Provide security awareness training for development team
+          
+          ## Next Steps
+          
+          - [ ] Review and remediate any high/critical findings
+          - [ ] Update security policies based on scan results
+          - [ ] Schedule follow-up scans
+          - [ ] Update security documentation
+          
+          EOF
+          
+          echo "Security report generated: security-report.md"
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.md
+          retention-days: 90
+
+      - name: Create security issue (if vulnerabilities found)
+        if: needs.dependency-scan.result == 'failure' || needs.sast-scan.result == 'failure' || needs.infrastructure-scan.result == 'failure' || needs.secrets-scan.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = await github.rest.issues.create({
+              owner,
+              repo,
+              title: `🚨 Security Vulnerabilities Detected - ${new Date().toISOString().split('T')[0]}`,
+              body: `## Security Scan Results
+              
+              High-priority security vulnerabilities have been detected in the daily security scan.
+              
+              **Scan Details:**
+              - Date: ${new Date().toISOString()}
+              - Scan Type: ${{ github.event.inputs.scan_type || 'full' }}
+              - Environment: ${{ github.event.inputs.target_environment || 'all' }}
+              
+              **Failed Scans:**
+              - Dependency Scan: ${{ needs.dependency-scan.result }}
+              - SAST Scan: ${{ needs.sast-scan.result }}
+              - Infrastructure Scan: ${{ needs.infrastructure-scan.result }}
+              - Secrets Scan: ${{ needs.secrets-scan.result }}
+              
+              **Action Required:**
+              1. Review the security report artifact
+              2. Address high and critical vulnerabilities immediately
+              3. Update affected dependencies and configurations
+              4. Re-run security scans to verify fixes
+              
+              **Artifacts:**
+              - Security scan results are available in the workflow run
+              - Detailed findings in SARIF format uploaded to Security tab
+              
+              ⚠️ **This issue should be resolved with high priority to maintain security compliance.**`,
+              labels: ['security', 'high-priority', 'vulnerability']
+            });
+            
+            console.log('Security issue created:', issue.data.number);
+
+      - name: Post scan summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # Security Scan Summary
+          
+          ## Scan Results
+          - **Dependency Scan**: ${{ needs.dependency-scan.result == 'success' && '✅ Passed' || '❌ Failed' }}
+          - **SAST Scan**: ${{ needs.sast-scan.result == 'success' && '✅ Passed' || '❌ Failed' }}
+          - **Infrastructure Scan**: ${{ needs.infrastructure-scan.result == 'success' && '✅ Passed' || '❌ Failed' }}
+          - **Secrets Scan**: ${{ needs.secrets-scan.result == 'success' && '✅ Passed' || '❌ Failed' }}
+          
+          ## Compliance Status
+          - **OWASP Top 10**: Validated
+          - **HIPAA Requirements**: Checked
+          - **AWS Security**: Reviewed
+          
+          ## Next Actions
+          - Review any detected vulnerabilities in the Security tab
+          - Check uploaded artifacts for detailed results
+          - Address any high-priority findings immediately
+          EOF

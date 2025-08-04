@@ -1,0 +1,220 @@
+{
+  "workflows": {
+    "taskAllocation": {
+      "name": "Task Allocation Workflow",
+      "description": "Standard process for allocating tasks to specialized agents",
+      "steps": [
+        {
+          "step": 1,
+          "action": "analyzeRequest",
+          "description": "Parse user request and identify technical requirements",
+          "inputs": ["user_request", "project_context"],
+          "outputs": ["technical_requirements", "complexity_assessment"]
+        },
+        {
+          "step": 2,
+          "action": "identifyAgents",
+          "description": "Determine which agents are needed based on task type",
+          "inputs": ["technical_requirements", "agent_capabilities"],
+          "outputs": ["primary_agent", "supporting_agents"]
+        },
+        {
+          "step": 3,
+          "action": "checkDependencies",
+          "description": "Verify prerequisites and identify blocking tasks",
+          "inputs": ["task_requirements", "project_state"],
+          "outputs": ["dependencies", "blockers"]
+        },
+        {
+          "step": 4,
+          "action": "createWorkPlan",
+          "description": "Generate detailed work plan with timeline",
+          "inputs": ["requirements", "dependencies", "agent_capacity"],
+          "outputs": ["task_breakdown", "timeline", "deliverables"]
+        },
+        {
+          "step": 5,
+          "action": "allocateTasks",
+          "description": "Assign tasks to agents with full context",
+          "inputs": ["work_plan", "agent_assignments"],
+          "outputs": ["task_assignments", "briefing_documents"]
+        }
+      ]
+    },
+    "progressTracking": {
+      "name": "Progress Tracking Workflow",
+      "description": "Continuous monitoring of development progress",
+      "steps": [
+        {
+          "step": 1,
+          "action": "collectUpdates",
+          "description": "Gather status updates from active agents",
+          "inputs": ["agent_reports", "task_status"],
+          "outputs": ["progress_data", "completion_status"]
+        },
+        {
+          "step": 2,
+          "action": "updateProjectState",
+          "description": "Update overall project status and metrics",
+          "inputs": ["progress_data", "current_state"],
+          "outputs": ["updated_state", "milestone_progress"]
+        },
+        {
+          "step": 3,
+          "action": "identifyBlockers",
+          "description": "Detect and categorize any blocking issues",
+          "inputs": ["agent_reports", "dependency_status"],
+          "outputs": ["active_blockers", "resolution_priorities"]
+        },
+        {
+          "step": 4,
+          "action": "generateReport",
+          "description": "Create progress report for stakeholders",
+          "inputs": ["updated_state", "blockers", "metrics"],
+          "outputs": ["progress_report", "recommendations"]
+        }
+      ]
+    },
+    "qualityReview": {
+      "name": "Quality Review Workflow",
+      "description": "Comprehensive review of completed deliverables",
+      "steps": [
+        {
+          "step": 1,
+          "action": "validateDeliverables",
+          "description": "Check deliverables against acceptance criteria",
+          "inputs": ["deliverables", "acceptance_criteria"],
+          "outputs": ["validation_results", "gap_analysis"]
+        },
+        {
+          "step": 2,
+          "action": "securityReview",
+          "description": "Security engineer reviews for compliance",
+          "inputs": ["deliverables", "security_requirements"],
+          "outputs": ["security_assessment", "compliance_status"]
+        },
+        {
+          "step": 3,
+          "action": "architectureReview",
+          "description": "Architect reviews for design consistency",
+          "inputs": ["deliverables", "architecture_standards"],
+          "outputs": ["architecture_assessment", "design_feedback"]
+        },
+        {
+          "step": 4,
+          "action": "approveOrReject",
+          "description": "Final approval decision with feedback",
+          "inputs": ["all_assessments", "quality_gates"],
+          "outputs": ["approval_decision", "feedback", "next_actions"]
+        }
+      ]
+    },
+    "phaseTransition": {
+      "name": "Phase Transition Workflow",
+      "description": "Process for moving between development phases",
+      "steps": [
+        {
+          "step": 1,
+          "action": "validatePhaseCompletion",
+          "description": "Verify all phase deliverables are complete",
+          "inputs": ["phase_checklist", "deliverable_status"],
+          "outputs": ["completion_status", "outstanding_items"]
+        },
+        {
+          "step": 2,
+          "action": "qualityGateReview",
+          "description": "Execute quality gates for phase",
+          "inputs": ["phase_deliverables", "quality_criteria"],
+          "outputs": ["quality_results", "gate_status"]
+        },
+        {
+          "step": 3,
+          "action": "stakeholderApproval",
+          "description": "Get approval from relevant stakeholders",
+          "inputs": ["phase_summary", "quality_results"],
+          "outputs": ["approval_status", "feedback"]
+        },
+        {
+          "step": 4,
+          "action": "prepareNextPhase",
+          "description": "Set up and brief agents for next phase",
+          "inputs": ["next_phase_plan", "current_context"],
+          "outputs": ["phase_kickoff", "agent_briefings"]
+        }
+      ]
+    },
+    "sessionContinuity": {
+      "name": "Session Continuity Workflow",
+      "description": "Process for resuming work across conversation sessions",
+      "steps": [
+        {
+          "step": 1,
+          "action": "loadPreviousState",
+          "description": "Retrieve project state from Memory MCP",
+          "inputs": ["session_id", "project_id"],
+          "outputs": ["project_state", "agent_context"]
+        },
+        {
+          "step": 2,
+          "action": "assessCurrentSituation",
+          "description": "Evaluate what has changed since last session",
+          "inputs": ["previous_state", "current_context"],
+          "outputs": ["status_delta", "priority_updates"]
+        },
+        {
+          "step": 3,
+          "action": "identifyNextPriorities",
+          "description": "Determine most critical tasks to continue",
+          "inputs": ["project_state", "user_intent"],
+          "outputs": ["priority_tasks", "agent_assignments"]
+        },
+        {
+          "step": 4,
+          "action": "briefAgents",
+          "description": "Provide agents with current context",
+          "inputs": ["agent_assignments", "project_context"],
+          "outputs": ["agent_briefings", "task_allocations"]
+        }
+      ]
+    }
+  },
+  "templates": {
+    "agentBriefing": {
+      "format": {
+        "taskContext": "Background information and project requirements",
+        "specificTask": "Detailed task description and scope",
+        "deliverables": "Expected outputs and formats",
+        "acceptanceCriteria": "Quality standards and validation requirements",
+        "dependencies": "Prerequisites and related work",
+        "timeline": "Expected completion dates and milestones",
+        "resources": "Available MCP tools and supporting agents",
+        "constraints": "Budget, security, and compliance limitations"
+      }
+    },
+    "progressReport": {
+      "format": {
+        "executiveSummary": "High-level project status and key achievements",
+        "phaseProgress": "Current phase status and completion percentage",
+        "completedWork": "Recently completed tasks and deliverables",
+        "activeWork": "Currently in-progress tasks and assignments",
+        "upcomingWork": "Next priorities and planned activities",
+        "blockers": "Issues requiring resolution or attention",
+        "risks": "Potential problems and mitigation strategies",
+        "metrics": "Key performance indicators and quality measures",
+        "recommendations": "Suggested actions and optimizations"
+      }
+    },
+    "qualityGate": {
+      "format": {
+        "gateId": "Unique identifier for the quality gate",
+        "gateType": "Type of gate (security, performance, compliance)",
+        "criteria": "Specific requirements that must be met",
+        "validation": "Testing or review procedures",
+        "metrics": "Measurable success criteria",
+        "approver": "Responsible agent or stakeholder",
+        "status": "Current gate status (pending, passed, failed)",
+        "evidence": "Supporting documentation or test results"
+      }
+    }
+  }
+}

@@ -1,0 +1,103 @@
+# Development Environment Configuration
+# GitHub Environment: dev
+
+name: dev
+description: Development environment for Clinical Trial Platform
+
+# Environment Variables
+variables:
+  ENVIRONMENT: dev
+  AWS_REGION: us-east-1
+  NODE_ENV: development
+  LOG_LEVEL: debug
+  API_TIMEOUT: 30000
+  MONITORING_LEVEL: basic
+
+# No approval required for development
+protection_rules:
+  reviewers: []
+  prevent_self_review: false
+  required_reviewers: 0
+
+# Development-specific deployment rules
+deployment_rules:
+  # Allow any branch to deploy to development
+  deployment_branches:
+    protected_branches: false
+    custom_branch_policies: true
+    custom_branches:
+      - develop
+      - feature/*
+      - bugfix/*
+      - hotfix/*
+  
+  # No wait timer for development
+  wait_timer: 0
+  
+  # Allow automatic deployments
+  auto_deployment: true
+
+# Secrets required for development environment
+required_secrets:
+  - AWS_ACCESS_KEY_ID_DEV
+  - AWS_SECRET_ACCESS_KEY_DEV
+  - SNYK_TOKEN
+  - LHCI_GITHUB_APP_TOKEN
+
+# Optional secrets for enhanced features
+optional_secrets:
+  - SLACK_WEBHOOK_URL
+  - DATADOG_API_KEY
+  - SENTRY_DSN
+
+# Development environment configuration
+configuration:
+  # Resource scaling for development
+  scaling:
+    lambda_memory: 512
+    lambda_timeout: 30
+    aurora_min_capacity: 0.5
+    aurora_max_capacity: 2
+  
+  # Monitoring and alerting
+  monitoring:
+    enabled: true
+    retention_days: 7
+    detailed_monitoring: false
+    custom_metrics: false
+  
+  # Security settings
+  security:
+    enforce_https: true
+    enable_waf: false
+    enable_vpc_flow_logs: false
+    backup_retention_days: 7
+  
+  # Cost optimization
+  cost_optimization:
+    auto_scaling: true
+    spot_instances: true
+    lifecycle_policies: true
+    reserved_capacity: false
+
+# Development-specific feature flags
+feature_flags:
+  debug_mode: true
+  performance_testing: true
+  experimental_features: true
+  mock_external_services: true
+  detailed_logging: true
+
+# Development quality gates
+quality_gates:
+  unit_test_coverage: 75  # Lower threshold for development
+  security_scan: optional
+  performance_baseline: optional
+  accessibility_check: optional
+
+# Development data management
+data_management:
+  seed_data: true
+  anonymized_data: true
+  backup_strategy: minimal
+  data_retention_days: 30

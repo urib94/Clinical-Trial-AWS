@@ -1,0 +1,10 @@
+# Development Environment Configuration
+# Copy this file to terraform.tfvars and update values
+
+aws_region = "us-east-1"
+
+# Optional: EC2 Key Pair for NAT instance access (for debugging)
+key_name = ""
+
+# Optional: Email for security alerts in development
+security_alert_email = "dev-team@clinicaltrial.com"

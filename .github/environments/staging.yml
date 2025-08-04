@@ -1,0 +1,144 @@
+# Staging Environment Configuration
+# GitHub Environment: staging
+
+name: staging
+description: Staging environment for Clinical Trial Platform - Production-like testing
+
+# Environment Variables
+variables:
+  ENVIRONMENT: staging
+  AWS_REGION: us-east-1
+  NODE_ENV: production
+  LOG_LEVEL: info
+  API_TIMEOUT: 15000
+  MONITORING_LEVEL: enhanced
+
+# Limited approval for staging deployments
+protection_rules:
+  reviewers:
+    - type: team
+      name: clinical-trial-dev-team
+  prevent_self_review: true
+  required_reviewers: 1
+  deployment_timeout: 30  # 30 minutes
+
+# Staging-specific deployment rules
+deployment_rules:
+  # Only main branch can deploy to staging
+  deployment_branches:
+    protected_branches: true
+    custom_branch_policies: false
+  
+  # Brief wait timer for staging
+  wait_timer: 2  # 2 minutes
+  
+  # Manual approval required
+  auto_deployment: false
+
+# Secrets required for staging environment
+required_secrets:
+  - AWS_ACCESS_KEY_ID_STAGING
+  - AWS_SECRET_ACCESS_KEY_STAGING
+  - SNYK_TOKEN
+  - LHCI_GITHUB_APP_TOKEN
+
+# Enhanced secrets for staging validation
+optional_secrets:
+  - SLACK_WEBHOOK_URL
+  - DATADOG_API_KEY
+  - SENTRY_DSN
+  - PERFORMANCE_TESTING_TOKEN
+
+# Staging environment configuration
+configuration:
+  # Production-like resource scaling
+  scaling:
+    lambda_memory: 1024
+    lambda_timeout: 30
+    aurora_min_capacity: 1
+    aurora_max_capacity: 4
+  
+  # Enhanced monitoring and alerting
+  monitoring:
+    enabled: true
+    retention_days: 30
+    detailed_monitoring: true
+    custom_metrics: true
+    alerting: true
+  
+  # Production-like security settings
+  security:
+    enforce_https: true
+    enable_waf: true
+    enable_vpc_flow_logs: true
+    backup_retention_days: 30
+    encryption_at_rest: true
+    encryption_in_transit: true
+  
+  # Balanced cost optimization
+  cost_optimization:
+    auto_scaling: true
+    spot_instances: false
+    lifecycle_policies: true
+    reserved_capacity: false
+
+# Staging-specific feature flags
+feature_flags:
+  debug_mode: false
+  performance_testing: true
+  experimental_features: true
+  mock_external_services: false
+  detailed_logging: true
+  canary_deployments: true
+
+# Staging quality gates (production-like)
+quality_gates:
+  unit_test_coverage: 85
+  security_scan: required
+  performance_baseline: required
+  accessibility_check: required
+  end_to_end_tests: required
+  load_testing: required
+
+# Staging data management
+data_management:
+  seed_data: true
+  anonymized_data: true
+  backup_strategy: comprehensive
+  data_retention_days: 90
+  disaster_recovery: enabled
+
+# Blue-green deployment configuration
+blue_green_deployment:
+  enabled: true
+  health_check_grace_period: 300  # 5 minutes
+  rollback_threshold: 5  # 5% error rate
+  traffic_shift_percentage: 100
+
+# Performance testing configuration
+performance_testing:
+  enabled: true
+  lighthouse_ci: true
+  load_testing: true
+  stress_testing: false
+  performance_budget:
+    first_contentful_paint: 2000  # 2 seconds
+    largest_contentful_paint: 4000  # 4 seconds
+    cumulative_layout_shift: 0.1
+    time_to_interactive: 3000  # 3 seconds
+
+# Security testing configuration
+security_testing:
+  sast_scan: required
+  dast_scan: required
+  dependency_scan: required
+  infrastructure_scan: required
+  penetration_testing: optional
+
+# Integration testing
+integration_testing:
+  api_testing: required
+  database_testing: required
+  authentication_testing: required
+  authorization_testing: required
+  external_service_testing: required

@@ -1,0 +1,47 @@
+{
+  "globalShortcut": "Ctrl+;",
+  "mcpServers": {
+    "aws-clinical-trial": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-aws"],
+      "env": {
+        "AWS_REGION": "us-east-1",
+        "AWS_PROFILE": "clinical-trial"
+      }
+    },
+    "postgres-clinical": {
+      "command": "npx", 
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_CONNECTION_STRING": "${CLINICAL_TRIAL_DB_URL}"
+      }
+    },
+    "github-clinical": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"], 
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
+        "GITHUB_REPO_OWNER": "your-org",
+        "GITHUB_REPO_NAME": "Clinical-Trial-AWS"
+      }
+    },
+    "memory-clinical": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_STORE_PATH": "./claude/memory"
+      }
+    },
+    "filesystem-clinical": {
+      "command": "npx", 
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\Projects\\Clinical-Trail-AWS"]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    }
+  }
+}

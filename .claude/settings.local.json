@@ -7,7 +7,10 @@
       "Bash(mkdir:*)",
       "Bash(ls:*)",
       "Bash(chmod:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(grep:*)",
+      "Bash(node:*)",
+      "Bash(npm run docs:validate:*)"
     ],
     "deny": []
   }

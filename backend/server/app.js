@@ -24,6 +24,9 @@ const validationMiddleware = require('./middleware/validation');
 const errorHandler = require('./middleware/error-handler');
 const auditLogger = require('./middleware/audit-logger');
 
+// Import Swagger documentation setup
+const { setupSwagger, addDocumentationLinks, validateOpenApiSpec } = require('./swagger-setup');
+
 class ClinicalTrialServer {
     constructor() {
         this.app = express();
@@ -190,6 +193,9 @@ class ClinicalTrialServer {
         // Audit logging middleware
         this.app.use(auditLogger);
 
+        // API documentation middleware
+        this.app.use(addDocumentationLinks);
+
         // Trust proxy in production
         if (this.environment === 'production') {
             this.app.set('trust proxy', 1);
@@ -229,6 +235,9 @@ class ClinicalTrialServer {
                 documentation: '/api/docs'
             });
         });
+
+        // Setup API documentation
+        setupSwagger(this.app);
 
         // API Routes
         this.app.use('/api/auth', authRoutes);
@@ -297,12 +306,18 @@ class ClinicalTrialServer {
     }
 
     start() {
+        // Validate OpenAPI specification
+        const specValid = validateOpenApiSpec();
+        if (!specValid) {
+            console.warn('⚠️  API documentation may be incomplete');
+        }
+
         this.server = this.app.listen(this.port, () => {
             console.log('\n🚀 Clinical Trial Platform API Server Started');
             console.log(`   Environment: ${this.environment}`);
             console.log(`   Port: ${this.port}`);
             console.log(`   Health Check: http://localhost:${this.port}/health`);
-            console.log(`   API Documentation: http://localhost:${this.port}/api`);
+            console.log(`   API Documentation: http://localhost:${this.port}/api-docs`);
             console.log('\n📡 Available Endpoints:');
             console.log('   POST /api/auth/login           - User authentication');
             console.log('   POST /api/auth/logout          - User logout');
@@ -311,6 +326,10 @@ class ClinicalTrialServer {
             console.log('   GET  /api/questionnaires       - List questionnaires');
             console.log('   POST /api/responses            - Submit responses');
             console.log('   POST /api/media/upload         - Upload media files');
+            console.log('\n📚 API Documentation:');
+            console.log(`   Interactive UI: http://localhost:${this.port}/api-docs`);
+            console.log(`   OpenAPI JSON:   http://localhost:${this.port}/api-docs/json`);
+            console.log(`   OpenAPI YAML:   http://localhost:${this.port}/api-docs/yaml`);
             console.log('\n⚡ Ready for requests!');
         });
 

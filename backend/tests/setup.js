@@ -1,44 +1,35 @@
 const { Pool } = require('pg');
 const dotenv = require('dotenv');
 
-// Load test environment variables
+// Load test environment configuration
 dotenv.config({ path: '.env.test' });
 
-// Create a test database connection pool
+// Configure test database connection
 const testPool = new Pool({
-  connectionString: process.env.TEST_DATABASE_URL,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000
+  user: process.env.DB_TEST_USER,
+  host: process.env.DB_TEST_HOST,
+  database: process.env.DB_TEST_NAME,
+  password: process.env.DB_TEST_PASSWORD,
+  port: process.env.DB_TEST_PORT,
 });
 
 // Global setup for tests
 beforeAll(async () => {
-  // Perform test database setup
+  // Reset test database before running tests
   await testPool.query('BEGIN');
-  
-  // Optional: Seed test data or reset database state
-  await testPool.query(`
-    -- Reset sequences and clear tables
-    TRUNCATE TABLE physicians, patients, clinical_trials CASCADE;
-    
-    -- Reset any auto-incrementing sequences
-    ALTER SEQUENCE physicians_id_seq RESTART WITH 1;
-    ALTER SEQUENCE patients_id_seq RESTART WITH 1;
-    ALTER SEQUENCE clinical_trials_id_seq RESTART WITH 1;
-  `);
+  await testPool.query('DELETE FROM users');
+  await testPool.query('DELETE FROM patients');
+  await testPool.query('DELETE FROM physicians');
+  await testPool.query('DELETE FROM questionnaires');
+  await testPool.query('COMMIT');
 });
 
+// Cleanup after tests
 afterAll(async () => {
-  // Close database connection
   await testPool.end();
 });
 
-// Provide global test utilities
-global.testPool = testPool;
-
-// Error handler to prevent unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Application specific logging, throwing an error, or other logic here
-});
+// Export test utilities
+module.exports = {
+  testPool,
+};

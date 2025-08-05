@@ -4,13 +4,13 @@
   "description": "Healthcare clinical trial platform with secure data management",
   "main": "backend/server/app.js",
   "scripts": {
-    "test": "NODE_ENV=test jest",
+    "test": "jest",
     "test:unit": "NODE_ENV=test jest --testPathPattern=unit",
     "test:integration": "NODE_ENV=test jest --testPathPattern=integration",
     "test:security": "NODE_ENV=test jest --testPathPattern=security",
     "test:performance": "NODE_ENV=test jest --testPathPattern=performance",
-    "test:coverage": "NODE_ENV=test jest --coverage",
-    "test:watch": "NODE_ENV=test jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
     "dev:setup": "node scripts/setup-local.js",
     "dev:db": "docker-compose up postgres redis pgadmin -d",
     "dev:services": "docker-compose up -d",
@@ -22,9 +22,6 @@
     "dev:migrate-rollback": "node backend/database/migrate.js down",
     "dev:clean": "docker-compose down -v && docker system prune -f",
     "start": "node backend/server/app.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
     "lint": "eslint backend/",
     "lint:fix": "eslint backend/ --fix",
     "docker:build": "docker-compose build",
@@ -32,7 +29,10 @@
     "docker:down": "docker-compose down",
     "docker:logs": "docker-compose logs -f",
     "db:backup": "node scripts/backup-db.js",
-    "db:restore": "node scripts/restore-db.js"
+    "db:restore": "node scripts/restore-db.js",
+    "docs:setup": "node scripts/setup-api-docs.js",
+    "docs:test": "node scripts/test-api-docs.js",
+    "docs:validate": "node -e \"const YAML = require('yamljs'); const spec = YAML.load('./docs/api/openapi.yaml'); console.log('OpenAPI spec is valid:', spec.info.title);\""
   },
   "keywords": [
     "clinical-trial",
@@ -74,8 +74,10 @@
     "sanitize-html": "^2.11.0",
     "sharp": "^0.32.6",
     "speakeasy": "^2.0.0",
+    "swagger-ui-express": "^5.0.1",
     "uuid": "^9.0.1",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "yamljs": "^0.3.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

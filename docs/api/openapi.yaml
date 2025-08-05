@@ -1,0 +1,2520 @@
+openapi: 3.0.3
+info:
+  title: Clinical Trial Data Collection Platform API
+  description: |
+    HIPAA-compliant RESTful API for clinical trial patient data collection platform.
+    
+    This API provides secure endpoints for:
+    - User authentication with JWT and MFA support
+    - Patient data management with column-level encryption
+    - Questionnaire creation and assignment
+    - Secure response collection and storage
+    - Media file uploads with virus scanning
+    - Comprehensive audit logging
+    
+    ## Security Features
+    - JWT Bearer token authentication
+    - Role-based access control (Physician vs Patient)
+    - Multi-factor authentication (MFA) support
+    - Column-level data encryption for PHI
+    - HIPAA-compliant audit logging
+    - Rate limiting and request throttling
+    - Virus scanning for file uploads
+    
+    ## Data Privacy
+    - All personally identifiable information (PII) is encrypted at rest
+    - PHI is never exposed in error messages
+    - Comprehensive audit trails for all data access
+    - Secure token-based session management
+    
+    ## Authentication Flow
+    1. Login with email/password to receive access token
+    2. Include Bearer token in Authorization header for all requests
+    3. Refresh tokens before expiration using /auth/refresh
+    4. Complete MFA verification if enabled
+    
+  version: 1.0.0
+  contact:
+    name: Clinical Trial Platform Development Team
+    email: dev@clinicaltrial.platform
+  license:
+    name: Proprietary
+    url: https://clinicaltrial.platform/license
+
+servers:
+  - url: http://localhost:3001/api
+    description: Local development server
+  - url: https://api.clinicaltrial.platform/api
+    description: Production server
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer token obtained from /auth/login endpoint.
+        
+        Example: Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique user identifier
+        email:
+          type: string
+          format: email
+          description: User's email address
+        userType:
+          type: string
+          enum: [physician, patient]
+          description: User role type
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+          description: Account status
+        mfaEnabled:
+          type: boolean
+          description: Whether MFA is enabled for this user
+        profileCompleted:
+          type: boolean
+          description: Whether user has completed their profile
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+      required:
+        - id
+        - email
+        - userType
+        - status
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: dr.smith@centralmedical.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: User's password
+          example: DevPassword123!
+        userType:
+          type: string
+          enum: [physician, patient]
+          description: Type of user account
+          example: physician
+        mfaCode:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: MFA code (required if MFA is enabled)
+          example: "123456"
+      required:
+        - email
+        - password
+        - userType
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Login successful
+        user:
+          $ref: '#/components/schemas/User'
+        accessToken:
+          type: string
+          description: JWT access token for API authentication
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        expiresIn:
+          type: string
+          description: Token expiration time
+          example: 30m
+        requiresMfa:
+          type: boolean
+          description: Indicates if MFA code is required
+          example: false
+      required:
+        - success
+        - message
+
+    RefreshTokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        accessToken:
+          type: string
+          description: New JWT access token
+        expiresIn:
+          type: string
+          description: Token expiration time
+          example: 30m
+      required:
+        - success
+        - accessToken
+        - expiresIn
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: patient@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Secure password meeting complexity requirements
+          example: SecurePass123!
+        invitationToken:
+          type: string
+          minLength: 32
+          description: Valid invitation token received via email
+          example: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6
+        userType:
+          type: string
+          enum: [physician, patient]
+          description: Type of user account to create
+          example: patient
+      required:
+        - email
+        - password
+        - invitationToken
+        - userType
+
+    Questionnaire:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique questionnaire identifier
+        title:
+          type: string
+          description: Questionnaire title
+          example: Daily Symptom Assessment
+        description:
+          type: string
+          description: Detailed description of the questionnaire
+          example: Track daily symptoms and medication effectiveness
+        version:
+          type: string
+          description: Questionnaire version
+          example: "1.2"
+        type:
+          type: string
+          enum: [symptom_tracker, medication_adherence, quality_of_life, side_effects, custom]
+          description: Type of questionnaire
+          example: symptom_tracker
+        frequency:
+          type: string
+          enum: [once, daily, weekly, monthly, as_needed]
+          description: How often the questionnaire should be completed
+          example: daily
+        isRequired:
+          type: boolean
+          description: Whether completion is mandatory
+          example: true
+        estimatedTimeMinutes:
+          type: integer
+          minimum: 1
+          maximum: 120
+          description: Estimated completion time in minutes
+          example: 10
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+          description: Array of questions in the questionnaire
+        status:
+          type: string
+          enum: [draft, active, archived]
+          description: Current questionnaire status
+          example: active
+        publishedAt:
+          type: string
+          format: date-time
+          description: When the questionnaire was published
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+      required:
+        - id
+        - title
+        - version
+        - type
+        - frequency
+        - status
+
+    Question:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique question identifier
+        type:
+          type: string
+          enum: [text, number, scale, multiple_choice, single_choice, date, time, boolean]
+          description: Type of question
+          example: scale
+        text:
+          type: string
+          description: Question text
+          example: How would you rate your pain level today?
+        required:
+          type: boolean
+          description: Whether this question is required
+          example: true
+        options:
+          type: array
+          items:
+            type: string
+          description: Available options for choice questions
+          example: ["No pain", "Mild pain", "Moderate pain", "Severe pain"]
+        validation:
+          type: object
+          description: Validation rules for the question
+          properties:
+            min:
+              type: number
+              description: Minimum value for numeric/scale questions
+            max:
+              type: number
+              description: Maximum value for numeric/scale questions
+            minLength:
+              type: integer
+              description: Minimum text length
+            maxLength:
+              type: integer
+              description: Maximum text length
+      required:
+        - id
+        - type
+        - text
+        - required
+
+    PatientResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique response identifier
+        questionnaireId:
+          type: string
+          format: uuid
+          description: Associated questionnaire ID
+        questionnaireVersion:
+          type: string
+          description: Version of questionnaire used
+          example: "1.2"
+        status:
+          type: string
+          enum: [not_started, in_progress, completed, submitted, reviewed]
+          description: Current status of the response
+          example: completed
+        startedAt:
+          type: string
+          format: date-time
+          description: When the response was started
+        completedAt:
+          type: string
+          format: date-time
+          description: When the response was completed
+        submittedAt:
+          type: string
+          format: date-time
+          description: When the response was submitted
+        reviewedAt:
+          type: string
+          format: date-time
+          description: When the response was reviewed by physician
+        autoSavedAt:
+          type: string
+          format: date-time
+          description: Last auto-save timestamp
+        responseData:
+          type: object
+          description: Encrypted response data (only returned to authorized users)
+          additionalProperties: true
+      required:
+        - id
+        - questionnaireId
+        - questionnaireVersion
+        - status
+
+    MediaFile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique media file identifier
+        filename:
+          type: string
+          description: System-generated filename
+          example: a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6.jpg
+        originalFilename:
+          type: string
+          description: Original filename from upload
+          example: symptom_photo.jpg
+        fileType:
+          type: string
+          enum: [image, video, audio, document]
+          description: Category of file
+          example: image
+        mimeType:
+          type: string
+          description: MIME type of the file
+          example: image/jpeg
+        fileSize:
+          type: integer
+          description: File size in bytes
+          example: 2048576
+        virusScanStatus:
+          type: string
+          enum: [pending, clean, infected, error]
+          description: Virus scan result
+          example: clean
+        processingStatus:
+          type: string
+          enum: [pending, completed, error]
+          description: File processing status
+          example: completed
+        tags:
+          type: array
+          items:
+            type: string
+          description: User-defined tags for categorization
+          example: ["symptom", "rash", "day-7"]
+        uploadedAt:
+          type: string
+          format: date-time
+          description: Upload timestamp
+      required:
+        - id
+        - filename
+        - originalFilename
+        - fileType
+        - mimeType
+        - fileSize
+        - virusScanStatus
+        - processingStatus
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: Authentication required
+        code:
+          type: string
+          description: Machine-readable error code
+          example: AUTH_REQUIRED
+        details:
+          type: array
+          items:
+            type: object
+          description: Additional error details (validation errors, etc.)
+        timestamp:
+          type: string
+          format: date-time
+          description: Error timestamp
+        requestId:
+          type: string
+          description: Unique request identifier for debugging
+      required:
+        - error
+        - code
+
+    PaginationResponse:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: Current page number
+          example: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Items per page
+          example: 10
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of items
+          example: 25
+        pages:
+          type: integer
+          minimum: 1
+          description: Total number of pages
+          example: 3
+      required:
+        - page
+        - limit
+        - total
+        - pages
+
+paths:
+  # Authentication Endpoints
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User authentication
+      description: |
+        Authenticate a user with email and password. Returns JWT access token for subsequent API requests.
+        
+        If MFA is enabled, this endpoint will return `requiresMfa: true` and the client must call this 
+        endpoint again with the `mfaCode` parameter.
+        
+        Rate limited to 5 attempts per 15 minutes per IP address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              physician_login:
+                summary: Physician login
+                value:
+                  email: dr.smith@centralmedical.com
+                  password: DevPassword123!
+                  userType: physician
+              patient_login:
+                summary: Patient login
+                value:
+                  email: patient@example.com
+                  password: PatientPass123!
+                  userType: patient
+              mfa_login:
+                summary: Login with MFA code
+                value:
+                  email: dr.smith@centralmedical.com
+                  password: DevPassword123!
+                  userType: physician
+                  mfaCode: "123456"
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              examples:
+                successful_login:
+                  summary: Successful authentication
+                  value:
+                    success: true
+                    message: Login successful
+                    user:
+                      id: a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+                      email: dr.smith@centralmedical.com
+                      userType: physician
+                      status: active
+                      mfaEnabled: false
+                      profileCompleted: true
+                      createdAt: "2024-01-15T10:30:00Z"
+                    accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                    expiresIn: "30m"
+                mfa_required:
+                  summary: MFA code required
+                  value:
+                    success: true
+                    message: MFA code required
+                    requiresMfa: true
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                invalid_credentials:
+                  summary: Invalid credentials
+                  value:
+                    error: Invalid credentials
+                    code: INVALID_CREDENTIALS
+                    timestamp: "2024-01-15T10:30:00Z"
+                    requestId: req_a1b2c3d4e5f6g7h8
+                invalid_mfa:
+                  summary: Invalid MFA code
+                  value:
+                    error: Invalid MFA code
+                    code: INVALID_MFA
+                    timestamp: "2024-01-15T10:30:00Z"
+                    requestId: req_a1b2c3d4e5f6g7h8
+        '423':
+          description: Account locked due to failed attempts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiError'
+                  - type: object
+                    properties:
+                      lockedUntil:
+                        type: string
+                        format: date-time
+                        description: When the account will be unlocked
+              example:
+                error: Account temporarily locked due to failed login attempts
+                code: ACCOUNT_LOCKED
+                lockedUntil: "2024-01-15T11:00:00Z"
+                timestamp: "2024-01-15T10:30:00Z"
+                requestId: req_a1b2c3d4e5f6g7h8
+        '429':
+          description: Too many authentication attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Too many authentication attempts, please try again later
+                code: AUTH_RATE_LIMIT_EXCEEDED
+                timestamp: "2024-01-15T10:30:00Z"
+                requestId: req_a1b2c3d4e5f6g7h8
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User logout
+      description: |
+        Securely log out the current user by invalidating their JWT token.
+        
+        This endpoint:
+        - Adds the current token to the blacklist
+        - Ends the user session
+        - Clears the refresh token cookie
+        - Logs the logout event for audit purposes
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Logout successful
+        '500':
+          description: Logout failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh access token
+      description: |
+        Refresh an expired or near-expired access token using a refresh token.
+        
+        The refresh token can be provided either:
+        - As an HTTP-only cookie (recommended)
+        - In the request body
+        
+        Returns a new access token with extended expiration time.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  description: Refresh token (if not provided as cookie)
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshTokenResponse'
+              example:
+                success: true
+                accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                expiresIn: "30m"
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Invalid refresh token
+                code: INVALID_REFRESH_TOKEN
+                timestamp: "2024-01-15T10:30:00Z"
+                requestId: req_a1b2c3d4e5f6g7h8
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: User registration (invitation-based)
+      description: |
+        Register a new user account using a valid invitation token.
+        
+        Registration is invitation-only for security and compliance:
+        - Physicians are invited by organization administrators
+        - Patients are invited by their assigned physicians
+        
+        The invitation token must be valid and not expired.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              patient_registration:
+                summary: Patient registration
+                value:
+                  email: patient@example.com
+                  password: SecurePass123!
+                  invitationToken: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6
+                  userType: patient
+      responses:
+        '201':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Registration successful
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                        format: email
+                      userType:
+                        type: string
+                        enum: [physician, patient]
+        '400':
+          description: Registration failed - invalid invitation or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                invalid_invitation:
+                  summary: Invalid invitation token
+                  value:
+                    error: Invalid or expired invitation token
+                    code: INVALID_INVITATION
+                    timestamp: "2024-01-15T10:30:00Z"
+                    requestId: req_a1b2c3d4e5f6g7h8
+                validation_error:
+                  summary: Validation failed
+                  value:
+                    error: Validation failed
+                    code: VALIDATION_ERROR
+                    details:
+                      - field: password
+                        message: Password must be at least 8 characters
+                      - field: email
+                        message: Invalid email format
+                    timestamp: "2024-01-15T10:30:00Z"
+                    requestId: req_a1b2c3d4e5f6g7h8
+
+  /auth/me:
+    get:
+      tags:
+        - Authentication
+      summary: Get current user information
+      description: |
+        Retrieve information about the currently authenticated user.
+        
+        Returns user profile data including:
+        - Basic user information
+        - Account status and settings
+        - Profile completion status
+        - MFA configuration status
+      responses:
+        '200':
+          description: User information retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # Physician Endpoints
+  /physicians/dashboard:
+    get:
+      tags:
+        - Physicians
+      summary: Get physician dashboard data
+      description: |
+        Retrieve comprehensive dashboard information for the authenticated physician.
+        
+        Includes:
+        - Patient count under care
+        - Active studies participation
+        - Pending responses requiring review
+        - Recent patient activity
+        
+        Data is filtered to only include patients under the physician's care.
+      responses:
+        '200':
+          description: Dashboard data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  dashboard:
+                    type: object
+                    properties:
+                      overview:
+                        type: object
+                        properties:
+                          totalPatients:
+                            type: integer
+                            description: Number of patients under care
+                            example: 25
+                          activeStudies:
+                            type: integer
+                            description: Number of active studies physician is involved in
+                            example: 3
+                          pendingResponses:
+                            type: integer
+                            description: Number of responses awaiting review
+                            example: 8
+                      recentActivity:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            type:
+                              type: string
+                              example: response
+                            title:
+                              type: string
+                              example: Daily Symptom Assessment
+                            patientId:
+                              type: string
+                              description: Anonymized patient identifier
+                            status:
+                              type: string
+                              example: completed
+                            timestamp:
+                              type: string
+                              format: date-time
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Physician access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /physicians/dashboard/stats:
+    get:
+      tags:
+        - Physicians
+      summary: Get physician dashboard statistics
+      description: |
+        Retrieve detailed statistics for the physician dashboard with time-based filtering.
+        
+        Provides metrics such as:
+        - Active patient count in specified timeframe
+        - Response completion rates
+        - Average completion times
+        - Response status breakdown
+      parameters:
+        - name: timeframe
+          in: query
+          description: Number of days to include in statistics
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 30
+          example: 30
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  stats:
+                    type: object
+                    properties:
+                      timeframe:
+                        type: string
+                        example: "30 days"
+                      activePatients:
+                        type: integer
+                        example: 18
+                      totalResponses:
+                        type: integer
+                        example: 142
+                      completedResponses:
+                        type: integer
+                        example: 128
+                      inProgressResponses:
+                        type: integer
+                        example: 14
+                      avgCompletionTime:
+                        type: integer
+                        description: Average completion time in minutes
+                        example: 12
+
+  /physicians/profile:
+    get:
+      tags:
+        - Physicians
+      summary: Get physician profile
+      description: |
+        Retrieve the complete profile information for the authenticated physician.
+        
+        Includes professional details, organization affiliation, and account settings.
+      responses:
+        '200':
+          description: Profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  profile:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                        format: email
+                      firstName:
+                        type: string
+                        example: John
+                      lastName:
+                        type: string
+                        example: Smith
+                      title:
+                        type: string
+                        example: Dr.
+                      specialization:
+                        type: string
+                        example: Cardiology
+                      licenseNumber:
+                        type: string
+                        example: MD123456
+                      phone:
+                        type: string
+                        example: +1-555-0123
+                      department:
+                        type: string
+                        example: Internal Medicine
+                      role:
+                        type: string
+                        example: attending_physician
+                      permissions:
+                        type: array
+                        items:
+                          type: string
+                        example: ["create_questionnaires", "review_responses"]
+                      organization:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            example: Central Medical Center
+                          type:
+                            type: string
+                            example: hospital
+    put:
+      tags:
+        - Physicians
+      summary: Update physician profile
+      description: |
+        Update the physician's profile information.
+        
+        Only the provided fields will be updated. Sensitive fields like email and 
+        license number may require additional verification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                lastName:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                title:
+                  type: string
+                  maxLength: 20
+                specialization:
+                  type: string
+                  maxLength: 100
+                licenseNumber:
+                  type: string
+                  maxLength: 50
+                phone:
+                  type: string
+                  pattern: '^\+?[1-9]\d{1,14}$'
+                department:
+                  type: string
+                  maxLength: 100
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Profile updated successfully
+                  profile:
+                    type: object
+                    description: Updated profile data
+
+  /physicians/patients:
+    get:
+      tags:
+        - Physicians
+      summary: Get patients under physician's care
+      description: |
+        Retrieve a paginated list of patients under the physician's care.
+        
+        Results can be filtered by patient status and searched by patient ID or email.
+        Patient data is appropriately anonymized for HIPAA compliance.
+      parameters:
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: search
+          in: query
+          description: Search by patient ID or email
+          schema:
+            type: string
+            maxLength: 100
+        - name: status
+          in: query
+          description: Filter by patient status
+          schema:
+            type: string
+            enum: [active, inactive, completed, withdrawn]
+      responses:
+        '200':
+          description: Patients retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  patients:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        email:
+                          type: string
+                          format: email
+                        patientId:
+                          type: string
+                          description: Unique patient identifier
+                        status:
+                          type: string
+                          enum: [active, inactive, completed, withdrawn]
+                        enrollmentDate:
+                          type: string
+                          format: date
+                        relationshipType:
+                          type: string
+                          example: primary_care
+                        relationshipStarted:
+                          type: string
+                          format: date-time
+                        totalResponses:
+                          type: integer
+                          example: 15
+                        completedResponses:
+                          type: integer
+                          example: 12
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+
+  # Patient Endpoints
+  /patients/profile:
+    get:
+      tags:
+        - Patients
+      summary: Get patient profile
+      description: |
+        Retrieve the complete profile information for the authenticated patient.
+        
+        Includes personal information (decrypted for the patient), medical history,
+        and account settings. All PII is encrypted at rest and decrypted for display.
+      responses:
+        '200':
+          description: Profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  profile:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                        format: email
+                      patientId:
+                        type: string
+                        example: PT-2024-001
+                      firstName:
+                        type: string
+                        example: Jane
+                      lastName:
+                        type: string
+                        example: Doe
+                      phone:
+                        type: string
+                        example: +1-555-0456
+                      address:
+                        type: string
+                        example: 123 Main St, City, ST 12345
+                      emergencyContact:
+                        type: string
+                        example: John Doe - Spouse - +1-555-0457
+                      gender:
+                        type: string
+                        enum: [male, female, other, prefer_not_to_say]
+                      status:
+                        type: string
+                        enum: [active, inactive, completed, withdrawn]
+                      enrollmentDate:
+                        type: string
+                        format: date
+                      consentSigned:
+                        type: boolean
+                      consentDate:
+                        type: string
+                        format: date-time
+                      consentVersion:
+                        type: string
+                        example: "2.1"
+                      mfaEnabled:
+                        type: boolean
+                      createdAt:
+                        type: string
+                        format: date-time
+    put:
+      tags:
+        - Patients
+      summary: Update patient profile
+      description: |
+        Update the patient's profile information.
+        
+        All PII fields are automatically encrypted before storage. Medical history
+        and sensitive data require appropriate validation and audit logging.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                lastName:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                phone:
+                  type: string
+                  pattern: '^\+?[1-9]\d{1,14}$'
+                address:
+                  type: string
+                  maxLength: 200
+                emergencyContact:
+                  type: string
+                  maxLength: 200
+                gender:
+                  type: string
+                  enum: [male, female, other, prefer_not_to_say]
+                medicalHistory:
+                  type: string
+                  maxLength: 2000
+                medications:
+                  type: string
+                  maxLength: 1000
+                allergies:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Profile updated successfully
+                  updatedAt:
+                    type: string
+                    format: date-time
+
+  /patients/questionnaires:
+    get:
+      tags:
+        - Patients
+      summary: Get available questionnaires for patient
+      description: |
+        Retrieve questionnaires that the patient has been assigned and has access to.
+        
+        Includes questionnaire details and current response status for each questionnaire.
+        Only returns active questionnaires within the access period.
+      responses:
+        '200':
+          description: Questionnaires retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  questionnaires:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Questionnaire'
+                        - type: object
+                          properties:
+                            accessGrantedAt:
+                              type: string
+                              format: date-time
+                            accessExpiresAt:
+                              type: string
+                              format: date-time
+                            responseStatus:
+                              type: string
+                              enum: [not_started, in_progress, completed, submitted]
+                            responseId:
+                              type: string
+                              format: uuid
+                            startedAt:
+                              type: string
+                              format: date-time
+                            completedAt:
+                              type: string
+                              format: date-time
+                            submittedAt:
+                              type: string
+                              format: date-time
+
+  /patients/questionnaires/{questionnaireId}:
+    get:
+      tags:
+        - Patients
+      summary: Get questionnaire details with patient's response
+      description: |
+        Retrieve detailed questionnaire information including questions and any existing
+        patient response data.
+        
+        Response data is decrypted and returned if the patient has started the questionnaire.
+        Access permissions are verified before returning data.
+      parameters:
+        - name: questionnaireId
+          in: path
+          required: true
+          description: Unique questionnaire identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Questionnaire details retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  questionnaire:
+                    allOf:
+                      - $ref: '#/components/schemas/Questionnaire'
+                      - type: object
+                        properties:
+                          response:
+                            allOf:
+                              - $ref: '#/components/schemas/PatientResponse'
+                              - type: object
+                                description: Current patient response (null if not started)
+        '403':
+          description: Access denied to questionnaire
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Access denied
+                message: You do not have access to this questionnaire
+                code: QUESTIONNAIRE_ACCESS_DENIED
+        '404':
+          description: Questionnaire not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /patients/dashboard:
+    get:
+      tags:
+        - Patients
+      summary: Get patient dashboard data
+      description: |
+        Retrieve dashboard overview for the authenticated patient.
+        
+        Includes:
+        - Available questionnaires count
+        - Total and completed responses
+        - Recent activity timeline
+      responses:
+        '200':
+          description: Dashboard data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  dashboard:
+                    type: object
+                    properties:
+                      overview:
+                        type: object
+                        properties:
+                          availableQuestionnaires:
+                            type: integer
+                            example: 3
+                          totalResponses:
+                            type: integer
+                            example: 15
+                          completedResponses:
+                            type: integer
+                            example: 12
+                      recentActivity:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            type:
+                              type: string
+                              example: response
+                            title:
+                              type: string
+                              example: Weekly Symptom Check
+                            questionnaireType:
+                              type: string
+                              example: symptom_tracker
+                            status:
+                              type: string
+                              example: completed
+                            timestamp:
+                              type: string
+                              format: date-time
+
+  # Questionnaire Management Endpoints
+  /questionnaires:
+    get:
+      tags:
+        - Questionnaires
+      summary: Get questionnaires (filtered by user type)
+      description: |
+        Retrieve questionnaires based on user permissions:
+        - Patients: Only questionnaires they have access to
+        - Physicians: Questionnaires they created or have access to through studies
+        
+        Results are paginated and can be filtered by type, status, and search terms.
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: status
+          in: query
+          description: Filter by questionnaire status
+          schema:
+            type: string
+            enum: [draft, active, archived]
+            default: active
+        - name: type
+          in: query
+          description: Filter by questionnaire type
+          schema:
+            type: string
+            enum: [symptom_tracker, medication_adherence, quality_of_life, side_effects, custom]
+        - name: search
+          in: query
+          description: Search in title and description
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: Questionnaires retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  questionnaires:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Questionnaire'
+                        - type: object
+                          properties:
+                            creator:
+                              type: string
+                              description: Name of the physician who created the questionnaire
+                            studyTitle:
+                              type: string
+                              description: Associated study name
+                            stats:
+                              type: object
+                              properties:
+                                totalResponses:
+                                  type: integer
+                                completedResponses:
+                                  type: integer
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+    post:
+      tags:
+        - Questionnaires
+      summary: Create new questionnaire (physicians only)
+      description: |
+        Create a new questionnaire with questions and validation rules.
+        
+        Only physicians can create questionnaires. The questionnaire is created in
+        'draft' status and must be explicitly published to become available to patients.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  description: Questionnaire title
+                description:
+                  type: string
+                  maxLength: 1000
+                  description: Detailed description
+                version:
+                  type: string
+                  default: "1.0"
+                  description: Version number
+                studyId:
+                  type: string
+                  format: uuid
+                  description: Associated study ID (optional)
+                questionnaireType:
+                  type: string
+                  enum: [symptom_tracker, medication_adherence, quality_of_life, side_effects, custom]
+                frequency:
+                  type: string
+                  enum: [once, daily, weekly, monthly, as_needed]
+                scheduleData:
+                  type: object
+                  description: Scheduling configuration for recurring questionnaires
+                questions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Question'
+                  minItems: 1
+                validationRules:
+                  type: object
+                  description: Global validation rules for the questionnaire
+                isRequired:
+                  type: boolean
+                  default: false
+                estimatedTimeMinutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 120
+                instructions:
+                  type: string
+                  maxLength: 2000
+              required:
+                - title
+                - questionnaireType
+                - frequency
+                - questions
+            example:
+              title: Daily Pain Assessment
+              description: Track daily pain levels and medication effectiveness
+              questionnaireType: symptom_tracker
+              frequency: daily
+              isRequired: true
+              estimatedTimeMinutes: 5
+              questions:
+                - id: pain_level
+                  type: scale
+                  text: How would you rate your pain level today?
+                  required: true
+                  validation:
+                    min: 0
+                    max: 10
+                - id: medication_taken
+                  type: boolean
+                  text: Did you take your prescribed medication today?
+                  required: true
+      responses:
+        '201':
+          description: Questionnaire created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Questionnaire created successfully
+                  questionnaire:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      title:
+                        type: string
+                      version:
+                        type: string
+                      status:
+                        type: string
+                        example: draft
+                      createdAt:
+                        type: string
+                        format: date-time
+        '403':
+          description: Physician access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # Response Management Endpoints
+  /responses:
+    get:
+      tags:
+        - Responses
+      summary: Get responses (filtered by user permissions)
+      description: |
+        Retrieve patient responses based on user permissions:
+        - Patients: Only their own responses
+        - Physicians: Responses from patients under their care
+        
+        Results include response metadata but encrypted response data is only
+        returned in detailed views with proper authorization.
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: status
+          in: query
+          description: Filter by response status
+          schema:
+            type: string
+            enum: [not_started, in_progress, completed, submitted, reviewed]
+        - name: questionnaireId
+          in: query
+          description: Filter by questionnaire
+          schema:
+            type: string
+            format: uuid
+        - name: patientId
+          in: query
+          description: Filter by patient (physicians only)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Responses retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  responses:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/PatientResponse'
+                        - type: object
+                          properties:
+                            questionnaire:
+                              type: object
+                              properties:
+                                title:
+                                  type: string
+                                type:
+                                  type: string
+                            patient:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                patientId:
+                                  type: string
+                                  description: For physicians - anonymized patient ID
+                                email:
+                                  type: string
+                                  format: email
+                                  description: For patients - their own email
+                            reviewer:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                  description: Reviewing physician name
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+    post:
+      tags:
+        - Responses
+      summary: Create new response
+      description: |
+        Create a new response to a questionnaire.
+        
+        The response data is automatically encrypted before storage. A hash is
+        generated for integrity verification. Only patients can create responses
+        for questionnaires they have access to.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                questionnaireId:
+                  type: string
+                  format: uuid
+                  description: ID of the questionnaire being answered
+                questionnaireVersion:
+                  type: string
+                  description: Version of the questionnaire
+                responses:
+                  type: object
+                  description: Response data for each question
+                  additionalProperties: true
+                status:
+                  type: string
+                  enum: [in_progress, completed]
+                  default: in_progress
+                  description: Initial status of the response
+              required:
+                - questionnaireId
+                - questionnaireVersion
+                - responses
+            example:
+              questionnaireId: a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+              questionnaireVersion: "1.2"
+              status: in_progress
+              responses:
+                pain_level: 7
+                medication_taken: true
+                notes: "Pain was worse after exercise"
+      responses:
+        '201':
+          description: Response created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Response created successfully
+                  response:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                      startedAt:
+                        type: string
+                        format: date-time
+                      createdAt:
+                        type: string
+                        format: date-time
+        '403':
+          description: Access denied to questionnaire
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Response already exists
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiError'
+                  - type: object
+                    properties:
+                      existingResponseId:
+                        type: string
+                        format: uuid
+                        description: ID of the existing response
+              example:
+                error: Response already exists
+                message: You have already started this questionnaire
+                code: RESPONSE_EXISTS
+                existingResponseId: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
+
+  /responses/{responseId}:
+    get:
+      tags:
+        - Responses
+      summary: Get detailed response information
+      description: |
+        Retrieve detailed information about a specific response including
+        the decrypted response data.
+        
+        Access control:
+        - Patients can only access their own responses
+        - Physicians can access responses from patients under their care
+        
+        Response data is decrypted and returned with full questionnaire context.
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          description: Unique response identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Response details retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  response:
+                    allOf:
+                      - $ref: '#/components/schemas/PatientResponse'
+                      - type: object
+                        properties:
+                          questionnaire:
+                            type: object
+                            properties:
+                              title:
+                                type: string
+                              questions:
+                                type: array
+                                items:
+                                  $ref: '#/components/schemas/Question'
+                              validationRules:
+                                type: object
+                          patient:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                              patientId:
+                                type: string
+                              email:
+                                type: string
+                                format: email
+                          reviewedBy:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                          submissionIp:
+                            type: string
+                            description: IP address of submission (physicians only)
+                          deviceInfo:
+                            type: object
+                            description: Device information from submission
+        '403':
+          description: Access denied to response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Response not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Decryption error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Failed to decrypt response data
+                code: DECRYPTION_ERROR
+
+    put:
+      tags:
+        - Responses
+      summary: Update response data
+      description: |
+        Update an existing response with new data.
+        
+        Constraints:
+        - Only responses in 'in_progress' or 'completed' status can be updated
+        - Submitted and reviewed responses are locked from modification
+        - Response data is re-encrypted after update
+        - Auto-save timestamp is updated
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                responses:
+                  type: object
+                  description: Updated response data
+                  additionalProperties: true
+                status:
+                  type: string
+                  enum: [in_progress, completed]
+                  description: Updated status (optional)
+              required:
+                - responses
+      responses:
+        '200':
+          description: Response updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Response updated successfully
+                  response:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                      autoSavedAt:
+                        type: string
+                        format: date-time
+                      updatedAt:
+                        type: string
+                        format: date-time
+        '400':
+          description: Response cannot be modified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Response cannot be modified
+                message: Submitted or reviewed responses cannot be modified
+                code: RESPONSE_LOCKED
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /responses/{responseId}/submit:
+    post:
+      tags:
+        - Responses
+      summary: Submit response for review
+      description: |
+        Submit a completed response for physician review.
+        
+        This action:
+        - Changes status to 'submitted'
+        - Sets submission timestamp
+        - Marks completion timestamp if not already set
+        - Prevents further modifications
+        - Triggers notification to assigned physician
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Response submitted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Response submitted successfully
+                  response:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        example: submitted
+                      submittedAt:
+                        type: string
+                        format: date-time
+                      completedAt:
+                        type: string
+                        format: date-time
+        '400':
+          description: Response already submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: Response already submitted
+                code: RESPONSE_ALREADY_SUBMITTED
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # Media Upload Endpoints
+  /media/upload:
+    post:
+      tags:
+        - Media
+      summary: Upload single file
+      description: |
+        Upload a single media file (image, video, audio, or document).
+        
+        Security features:
+        - File type validation against allowed MIME types
+        - Virus scanning (results available via separate endpoint)
+        - File size limits (100MB maximum)
+        - Automatic file hash generation for integrity checking
+        - Secure random filename generation
+        
+        Supported file types:
+        - Images: JPEG, PNG, GIF, WebP
+        - Videos: MP4, MPEG, QuickTime, AVI
+        - Audio: MP3, WAV, OGG, M4A
+        - Documents: PDF, TXT, DOC, DOCX
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: File to upload
+                responseId:
+                  type: string
+                  format: uuid
+                  description: Associate file with a response (optional)
+                tags:
+                  type: string
+                  description: Comma-separated tags for categorization
+                  example: "symptom,rash,day-7"
+                description:
+                  type: string
+                  maxLength: 500
+                  description: File description
+              required:
+                - file
+      responses:
+        '201':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: File uploaded successfully
+                  file:
+                    $ref: '#/components/schemas/MediaFile'
+        '400':
+          description: Upload validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                no_file:
+                  summary: No file provided
+                  value:
+                    error: No file uploaded
+                    code: FILE_REQUIRED
+                invalid_type:
+                  summary: Invalid file type
+                  value:
+                    error: File type application/executable not allowed
+                    code: INVALID_FILE_TYPE
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                error: File size exceeds 100MB limit
+                code: FILE_TOO_LARGE
+
+  /media/upload-multiple:
+    post:
+      tags:
+        - Media
+      summary: Upload multiple files
+      description: |
+        Upload multiple files in a single request (maximum 5 files).
+        
+        Each file is processed individually with the same security measures
+        as single file upload. If any files fail processing, successful
+        uploads are still saved and partial success is reported.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  maxItems: 5
+                  description: Files to upload (maximum 5)
+                responseId:
+                  type: string
+                  format: uuid
+                  description: Associate files with a response (optional)
+                tags:
+                  type: string
+                  description: Comma-separated tags for all files
+                description:
+                  type: string
+                  maxLength: 500
+                  description: Description for all files
+              required:
+                - files
+      responses:
+        '201':
+          description: Files uploaded (may include partial failures)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "3 file(s) uploaded successfully, 1 file(s) failed"
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MediaFile'
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        filename:
+                          type: string
+                        error:
+                          type: string
+                    description: Errors for failed files (if any)
+
+  /media:
+    get:
+      tags:
+        - Media
+      summary: Get media files
+      description: |
+        Retrieve media files accessible to the current user.
+        
+        Access control:
+        - Patients: Files they uploaded or associated with their responses
+        - Physicians: Files from patients under their care
+        
+        Results can be filtered by file type, processing status, and associated response.
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: fileType
+          in: query
+          description: Filter by file type
+          schema:
+            type: string
+            enum: [image, video, audio, document]
+        - name: status
+          in: query
+          description: Filter by processing status
+          schema:
+            type: string
+            enum: [pending, completed, error]
+        - name: responseId
+          in: query
+          description: Filter by associated response
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Media files retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  media:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/MediaFile'
+                        - type: object
+                          properties:
+                            response:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                questionnaireTitle:
+                                  type: string
+                              description: Associated response (if any)
+                  pagination:
+                    $ref: '#/components/schemas/PaginationResponse'
+
+  /media/{mediaId}:
+    get:
+      tags:
+        - Media
+      summary: Get media file details
+      description: |
+        Retrieve detailed information about a specific media file.
+        
+        Includes metadata, processing status, virus scan results, and access information.
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Media details retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  media:
+                    allOf:
+                      - $ref: '#/components/schemas/MediaFile'
+                      - type: object
+                        properties:
+                          metadata:
+                            type: object
+                            description: File metadata and processing information
+                          virusScanResult:
+                            type: object
+                            description: Detailed virus scan results
+                          uploadedBy:
+                            type: string
+                            format: email
+                            description: Email of uploader
+        '403':
+          description: Access denied to media file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Media file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+    delete:
+      tags:
+        - Media
+      summary: Delete media file
+      description: |
+        Delete a media file and remove it from storage.
+        
+        This action:
+        - Removes the file from the filesystem
+        - Deletes the database record
+        - Cannot be undone
+        - Requires appropriate permissions
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: File deleted successfully
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /media/{mediaId}/download:
+    get:
+      tags:
+        - Media
+      summary: Download media file
+      description: |
+        Download the actual media file content.
+        
+        Security measures:
+        - Virus scan status is checked before download
+        - Access permissions are verified
+        - Download is logged for audit purposes
+        - Files with failed virus scans are blocked
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: Attachment with original filename
+              schema:
+                type: string
+                example: 'attachment; filename="document.pdf"'
+            Content-Type:
+              description: Original MIME type of the file
+              schema:
+                type: string
+                example: application/pdf
+        '403':
+          description: Access denied or virus scan failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                access_denied:
+                  summary: Access denied
+                  value:
+                    error: Access denied to file
+                    code: FILE_ACCESS_DENIED
+                virus_detected:
+                  summary: Virus detected
+                  value:
+                    error: File download blocked - virus detected
+                    code: FILE_INFECTED
+
+tags:
+  - name: Authentication
+    description: |
+      User authentication and session management endpoints.
+      
+      Includes login, logout, token refresh, registration, and MFA operations.
+      All authentication operations are rate-limited and logged for security auditing.
+  
+  - name: Physicians
+    description: |
+      Physician-specific endpoints for patient management and clinical oversight.
+      
+      Includes dashboard analytics, patient relationship management, and administrative functions.
+      All physician endpoints require authenticated physician role.
+  
+  - name: Patients
+    description: |
+      Patient-specific endpoints for profile management and questionnaire access.
+      
+      Includes personal profile management, questionnaire completion, and dashboard overview.
+      All patient endpoints require authenticated patient role.
+  
+  - name: Questionnaires
+    description: |
+      Questionnaire creation, management, and access endpoints.
+      
+      Physicians can create and manage questionnaires. Patients can access assigned questionnaires.
+      Supports versioning and comprehensive access control.
+  
+  - name: Responses
+    description: |
+      Patient response creation, management, and review endpoints.
+      
+      Handles encrypted storage of patient responses with comprehensive audit logging.
+      Supports auto-save, submission workflows, and physician review processes.
+  
+  - name: Media
+    description: |
+      File upload and management endpoints for media attachments.
+      
+      Supports secure file uploads with virus scanning, thumbnail generation, and access control.
+      Files can be associated with responses and tagged for organization.
+
+externalDocs:
+  description: Clinical Trial Platform Documentation
+  url: https://docs.clinicaltrial.platform

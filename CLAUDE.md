@@ -3,9 +3,11 @@
 ## Project Overview
 Healthcare clinical trial platform with mobile-first PWA, AWS serverless backend, and secure data management.
 
+**CURRENT DEVELOPMENT PHASE**: Local development and testing only - NO AWS deployment yet.
+
 ## Development Workflow Commands
 ```bash
-# Frontend Development
+# Frontend Development (Local)
 npm run dev          # Start Next.js development server
 npm run build        # Build production bundle
 npm run test         # Run Jest unit tests
@@ -13,23 +15,25 @@ npm run e2e          # Run Playwright E2E tests
 npm run lint         # ESLint check
 npm run type-check   # TypeScript check
 
-# Backend Development
-npm run lambda:dev   # Local Lambda development
-npm run lambda:test  # Test Lambda functions
+# Backend Development (Local)
+npm run lambda:dev   # Local Lambda development with LocalStack
+npm run lambda:test  # Test Lambda functions locally
 npm run api:docs     # Generate API documentation
+npm run db:local     # Run local PostgreSQL with Docker
+npm run cognito:local # Local Cognito simulation
 
-# Infrastructure
+# Infrastructure (Design & Validation Only)
 terraform fmt        # Format Terraform files
 terraform validate   # Validate Terraform configuration
-terraform plan       # Preview infrastructure changes
-terraform apply      # Apply infrastructure changes
+terraform plan       # Preview infrastructure changes (DRY RUN ONLY)
+# terraform apply    # DISABLED - No AWS deployment yet
 tflint              # Terraform linting
 checkov -d infra    # Security scanning
 
-# Deployment
-./scripts/deploy.ps1 dev    # Deploy to development
-./scripts/deploy.ps1 prod   # Deploy to production
-./scripts/seed_db.ts        # Seed database with test data
+# Local Testing & Simulation
+docker-compose up    # Start local development stack
+./scripts/setup-local.ps1   # Setup local development environment
+./scripts/seed-local-db.ts  # Seed local database with test data
 ```
 
 ## Project Structure
@@ -44,15 +48,22 @@ Clinical-Trail-AWS/
 └── .claude/          # Claude Code agent configurations
 ```
 
-## Key Technologies
+## Key Technologies (Local Development Stack)
 - **Frontend**: Next.js 14, React, TypeScript, Tailwind CSS, PWA
+- **Backend**: Node.js 20 with Express (simulating AWS Lambda locally)
+- **Database**: PostgreSQL with Docker (simulating Aurora Serverless v2)
+- **Auth**: Local Cognito simulation or Auth0 dev environment
+- **Storage**: Local filesystem or MinIO (simulating S3)
+- **Local Stack**: LocalStack for AWS service simulation
+- **IaC**: Terraform modules (design only, no deployment)
+- **Testing**: Jest, Playwright, terraform-compliance
+
+## Target Production Technologies (Future Deployment)
 - **Backend**: AWS Lambda (Node.js 20), TypeScript
 - **Database**: Aurora PostgreSQL Serverless v2
 - **Auth**: AWS Cognito with Google OAuth
 - **Storage**: S3 with lifecycle policies
 - **CDN**: CloudFront with custom domain
-- **IaC**: Terraform with modular design
-- **Testing**: Jest, Playwright, terraform-compliance
 
 ## Security Requirements
 - OWASP Top 10 compliance
@@ -82,9 +93,24 @@ Clinical-Trail-AWS/
 - Performance tests: Load testing
 - Infrastructure tests: terraform-compliance
 
-## Compliance & Monitoring
+## Local Development Environment
+- **Database**: PostgreSQL 15 with Docker Compose
+- **Authentication**: Local JWT simulation or Auth0 dev tenant
+- **File Storage**: Local filesystem with organized directory structure
+- **API Testing**: Postman collections for all endpoints
+- **Monitoring**: Local logging and health check endpoints
+
+## Future Production Compliance & Monitoring
 - HIPAA-aligned security controls
 - CloudWatch monitoring and alerting
 - AWS Config for compliance tracking
 - GuardDuty for threat detection
 - Daily automated backups
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+
+**DEVELOPMENT FOCUS**: All current development work should target local development environment setup and testing. AWS infrastructure code should be designed and validated but NOT deployed until explicitly requested.

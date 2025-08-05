@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clinical Trial Platform API Documentation</title>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css" />
+  <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@5.11.0/favicon-32x32.png" sizes="32x32" />
+  <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@5.11.0/favicon-16x16.png" sizes="16x16" />
+  <style>
+    html {
+      box-sizing: border-box;
+      overflow: -moz-scrollbars-vertical;
+      overflow-y: scroll;
+    }
+    
+    *, *:before, *:after {
+      box-sizing: inherit;
+    }
+    
+    body {
+      margin: 0;
+      background: #fafafa;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Open Sans", "Helvetica Neue", sans-serif;
+    }
+    
+    .swagger-ui .topbar {
+      background-color: #2c5aa0;
+      background-image: linear-gradient(135deg, #2c5aa0 0%, #1e3d72 100%);
+    }
+    
+    .swagger-ui .topbar .link {
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 18px;
+    }
+    
+    .swagger-ui .info .title {
+      color: #2c5aa0;
+    }
+    
+    .swagger-ui .info .description {
+      margin-bottom: 20px;
+    }
+    
+    .swagger-ui .scheme-container {
+      background: #f7f7f7;
+      border: 1px solid #d3d3d3;
+      border-radius: 4px;
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .swagger-ui .auth-wrapper {
+      background: #f0f8ff;
+      border: 1px solid #b0d4f1;
+      border-radius: 4px;
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .swagger-ui .btn.authorize {
+      background: #2c5aa0;
+      border-color: #2c5aa0;
+      color: #ffffff;
+    }
+    
+    .swagger-ui .btn.authorize:hover {
+      background: #1e3d72;
+      border-color: #1e3d72;
+    }
+    
+    .custom-header {
+      background: linear-gradient(135deg, #2c5aa0 0%, #1e3d72 100%);
+      color: white;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 0;
+    }
+    
+    .custom-header h1 {
+      margin: 0;
+      font-size: 2.2em;
+      font-weight: 600;
+    }
+    
+    .custom-header p {
+      margin: 10px 0 0 0;
+      font-size: 1.1em;
+      opacity: 0.9;
+    }
+    
+    .custom-info {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px;
+    }
+    
+    .custom-info h3 {
+      color: #2c5aa0;
+      margin-top: 0;
+      margin-bottom: 15px;
+    }
+    
+    .custom-info ul {
+      margin: 10px 0;
+      padding-left: 20px;
+    }
+    
+    .custom-info li {
+      margin: 5px 0;
+    }
+    
+    .auth-instructions {
+      background: #fff3cd;
+      border: 1px solid #ffeaa7;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 20px;
+    }
+    
+    .auth-instructions h4 {
+      color: #856404;
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+    
+    .auth-instructions code {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: 'Monaco', 'Consolas', 'Ubuntu Mono', monospace;
+      font-size: 0.9em;
+    }
+    
+    .environment-selector {
+      background: #e3f2fd;
+      border: 1px solid #90caf9;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 20px;
+    }
+    
+    .environment-selector h4 {
+      color: #1565c0;
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+    
+    .security-notice {
+      background: #ffebee;
+      border: 1px solid #ffcdd2;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 20px;
+    }
+    
+    .security-notice h4 {
+      color: #c62828;
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+    
+    .test-credentials {
+      background: #f3e5f5;
+      border: 1px solid #ce93d8;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 20px;
+    }
+    
+    .test-credentials h4 {
+      color: #6a1b9a;
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+    
+    .test-credentials .credentials-table {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 15px;
+      margin-top: 10px;
+    }
+    
+    .test-credentials .credential-item {
+      background: white;
+      border: 1px solid #e1bee7;
+      border-radius: 4px;
+      padding: 10px;
+    }
+    
+    .test-credentials .credential-item strong {
+      color: #4a148c;
+      display: block;
+      margin-bottom: 5px;
+    }
+    
+    .test-credentials .credential-item code {
+      background: #fafafa;
+      padding: 2px 4px;
+      border-radius: 2px;
+      font-size: 0.85em;
+    }
+    
+    @media (max-width: 768px) {
+      .test-credentials .credentials-table {
+        grid-template-columns: 1fr;
+      }
+      
+      .custom-header h1 {
+        font-size: 1.8em;
+      }
+      
+      .custom-header p {
+        font-size: 1em;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="custom-header">
+    <h1>🏥 Clinical Trial Platform API</h1>
+    <p>HIPAA-Compliant RESTful API for Clinical Trial Data Collection</p>
+  </div>
+
+  <div class="custom-info">
+    <h3>🚀 Getting Started</h3>
+    <p>This interactive API documentation allows you to explore and test all endpoints of the Clinical Trial Platform API.</p>
+    
+    <h4>Key Features:</h4>
+    <ul>
+      <li><strong>🔐 JWT Authentication:</strong> Secure Bearer token authentication with MFA support</li>
+      <li><strong>🏥 HIPAA Compliance:</strong> Column-level encryption and comprehensive audit logging</li>
+      <li><strong>👥 Role-Based Access:</strong> Separate endpoints for physicians and patients</li>
+      <li><strong>📋 Questionnaire Management:</strong> Create, assign, and manage clinical questionnaires</li>
+      <li><strong>📊 Response Collection:</strong> Secure, encrypted patient response storage</li>
+      <li><strong>📎 Media Uploads:</strong> File uploads with virus scanning and processing</li>
+    </ul>
+  </div>
+
+  <div class="environment-selector">
+    <h4>🌐 Environment Selection</h4>
+    <p>Choose your target environment:</p>
+    <ul>
+      <li><strong>Local Development:</strong> <code>http://localhost:3001/api</code></li>
+      <li><strong>Production:</strong> <code>https://api.clinicaltrial.platform/api</code></li>
+    </ul>
+    <p>The server selector below allows you to switch between environments for testing.</p>
+  </div>
+
+  <div class="auth-instructions">
+    <h4>🔑 Authentication Instructions</h4>
+    <p>To use protected endpoints, follow these steps:</p>
+    <ol>
+      <li>Use the <strong>POST /auth/login</strong> endpoint to obtain an access token</li>
+      <li>Click the <strong>"Authorize"</strong> button above</li>
+      <li>Enter your token in the format: <code>Bearer YOUR_ACCESS_TOKEN</code></li>
+      <li>Click <strong>"Authorize"</strong> to apply the token to all requests</li>
+    </ol>
+    <p><strong>Note:</strong> Tokens expire after 30 minutes. Use <strong>POST /auth/refresh</strong> to get a new token.</p>
+  </div>
+
+  <div class="test-credentials">
+    <h4>🧪 Development Test Credentials</h4>
+    <p><strong>For local development environment only:</strong></p>
+    
+    <div class="credentials-table">
+      <div class="credential-item">
+        <strong>Physician Account</strong>
+        <div>Email: <code>dr.smith@centralmedical.com</code></div>
+        <div>Password: <code>DevPassword123!</code></div>
+        <div>Type: <code>physician</code></div>
+      </div>
+      
+      <div class="credential-item">
+        <strong>Patient Account</strong>
+        <div>Email: <code>patient@example.com</code></div>
+        <div>Password: <code>PatientPass123!</code></div>
+        <div>Type: <code>patient</code></div>
+      </div>
+      
+      <div class="credential-item">
+        <strong>MFA Test Account</strong>
+        <div>Email: <code>dr.jones@centralmedical.com</code></div>
+        <div>Password: <code>MfaPassword123!</code></div>
+        <div>MFA Code: <code>123456</code></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="security-notice">
+    <h4>🔒 Security & Compliance Notice</h4>
+    <ul>
+      <li><strong>Production Security:</strong> Never use test credentials in production environments</li>
+      <li><strong>HIPAA Compliance:</strong> All patient data is encrypted and access is logged</li>
+      <li><strong>Rate Limiting:</strong> Authentication endpoints are strictly rate-limited</li>
+      <li><strong>Audit Logging:</strong> All API access is logged for compliance and security monitoring</li>
+      <li><strong>Data Privacy:</strong> PHI is never exposed in error messages or logs</li>
+    </ul>
+  </div>
+
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js" charset="UTF-8"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
+  
+  <script>
+    window.onload = function() {
+      // Determine the OpenAPI spec URL based on current location
+      const currentPath = window.location.pathname;
+      const basePath = currentPath.substring(0, currentPath.lastIndexOf('/'));
+      const specUrl = window.location.origin + basePath + '/openapi.yaml';
+      
+      const ui = SwaggerUIBundle({
+        url: specUrl,
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset
+        ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl
+        ],
+        layout: "StandaloneLayout",
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 1,
+        docExpansion: "list",
+        filter: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+        tryItOutEnabled: true,
+        requestInterceptor: (request) => {
+          // Add custom headers for development
+          if (request.url.includes('localhost')) {
+            request.headers['X-Environment'] = 'development';
+          }
+          
+          // Add request ID for debugging
+          request.headers['X-Request-ID'] = 'swagger-ui-' + Date.now();
+          
+          return request;
+        },
+        responseInterceptor: (response) => {
+          // Log response for debugging in development
+          if (window.location.hostname === 'localhost') {
+            console.log('API Response:', {
+              url: response.url,
+              status: response.status,
+              headers: response.headers,
+              body: response.obj
+            });
+          }
+          
+          return response;
+        },
+        onComplete: () => {
+          console.log('🏥 Clinical Trial Platform API Documentation loaded successfully');
+          
+          // Add custom styling after UI loads
+          const style = document.createElement('style');
+          style.textContent = `
+            .swagger-ui .info .title small {
+              background: #2c5aa0;
+              color: white;
+              padding: 4px 8px;
+              border-radius: 12px;
+              font-size: 0.6em;
+              margin-left: 10px;
+            }
+            
+            .swagger-ui .info .title small:before {
+              content: "v";
+            }
+          `;
+          document.head.appendChild(style);
+        },
+        configUrl: null,
+        oauth2RedirectUrl: window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '') + '/oauth2-redirect.html',
+        persistAuthorization: true,
+        displayOperationId: false,
+        displayRequestDuration: true,
+        defaultModelRendering: 'example',
+        submitButtonClass: 'btn authorize',
+        syntaxHighlight: {
+          theme: 'agate'
+        },
+        validatorUrl: null, // Disable validator for local development
+        supportedSubmitMethods: ['get', 'post', 'put', 'delete', 'patch', 'options', 'head'],
+        queryConfigEnabled: true
+      });
+
+      // Add environment detection and warnings
+      if (window.location.hostname === 'localhost') {
+        const notice = document.createElement('div');
+        notice.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          background: #ff9800;
+          color: white;
+          text-align: center;
+          padding: 10px;
+          font-weight: bold;
+          z-index: 9999;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        `;
+        notice.innerHTML = '🚧 DEVELOPMENT ENVIRONMENT - Do not use with production data';
+        document.body.appendChild(notice);
+        
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+          notice.style.display = 'none';
+        }, 5000);
+      }
+
+      window.ui = ui;
+    };
+
+    // Add keyboard shortcuts for power users
+    document.addEventListener('keydown', (e) => {
+      // Ctrl/Cmd + K to focus search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        const searchInput = document.querySelector('.swagger-ui input[type="text"]');
+        if (searchInput) {
+          searchInput.focus();
+        }
+      }
+      
+      // Ctrl/Cmd + / to toggle all sections
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        const expandButtons = document.querySelectorAll('.swagger-ui .opblock-summary');
+        expandButtons.forEach(button => button.click());
+      }
+    });
+
+    // Add service worker for offline documentation access
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(registration => {
+            console.log('📱 Service Worker registered for offline access');
+          })
+          .catch(error => {
+            console.log('Service Worker registration failed:', error);
+          });
+      });
+    }
+  </script>
+</body>
+</html>

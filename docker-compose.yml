@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 15 database for local development
+  postgres:
+    image: postgres:15-alpine
+    container_name: clinical_trial_postgres
+    environment:
+      POSTGRES_DB: clinical_trial_dev
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/init:/docker-entrypoint-initdb.d
+      - ./backend/database/setup-local-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev_user -d clinical_trial_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - clinical_trial_network
+
+  # Redis for session storage and caching
+  redis:
+    image: redis:7-alpine
+    container_name: clinical_trial_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass dev_redis_password
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - clinical_trial_network
+
+  # MinIO for local file storage (S3 simulation)
+  minio:
+    image: minio/minio:latest
+    container_name: clinical_trial_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - clinical_trial_network
+
+  # pgAdmin for database management (optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: clinical_trial_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@clinical-trial.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - clinical_trial_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  clinical_trial_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

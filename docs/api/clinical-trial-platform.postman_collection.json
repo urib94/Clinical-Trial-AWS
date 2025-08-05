@@ -1,0 +1,1259 @@
+{
+  "info": {
+    "name": "Clinical Trial Platform API",
+    "description": "Complete Postman collection for the Clinical Trial Data Collection Platform API.\n\nThis collection includes:\n- All authentication endpoints with MFA support\n- Physician portal endpoints\n- Patient portal endpoints\n- Questionnaire management\n- Response collection and management\n- Media upload and management\n\n**Setup Instructions:**\n1. Import this collection into Postman\n2. Set up environment variables (see Variables tab)\n3. Use the Authentication folder to login and get access tokens\n4. Tokens are automatically saved to environment variables\n\n**Security Features:**\n- JWT Bearer token authentication\n- Automatic token refresh\n- HIPAA-compliant data handling\n- Comprehensive request/response logging",
+    "_postman_id": "clinical-trial-api-v1",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global pre-request script for token management",
+          "const tokenExpiry = pm.environment.get('tokenExpiry');",
+          "const refreshToken = pm.environment.get('refreshToken');",
+          "",
+          "// Check if token needs refresh (5 minutes before expiry)",
+          "if (tokenExpiry && refreshToken) {",
+          "    const now = new Date().getTime();",
+          "    const expiry = new Date(tokenExpiry).getTime();",
+          "    const timeUntilExpiry = expiry - now;",
+          "    ",
+          "    if (timeUntilExpiry < 300000) { // 5 minutes",
+          "        console.log('Token expiring soon, attempting refresh...');",
+          "        ",
+          "        const refreshRequest = {",
+          "            url: pm.environment.get('baseUrl') + '/auth/refresh',",
+          "            method: 'POST',",
+          "            header: {",
+          "                'Content-Type': 'application/json'",
+          "            },",
+          "            body: {",
+          "                mode: 'raw',",
+          "                raw: JSON.stringify({",
+          "                    refreshToken: refreshToken",
+          "                })",
+          "            }",
+          "        };",
+          "        ",
+          "        pm.sendRequest(refreshRequest, (err, response) => {",
+          "            if (!err && response.code === 200) {",
+          "                const responseData = response.json();",
+          "                pm.environment.set('accessToken', responseData.accessToken);",
+          "                ",
+          "                // Calculate new expiry time",
+          "                const expiresIn = responseData.expiresIn; // e.g., '30m'",
+          "                const minutes = parseInt(expiresIn.replace('m', ''));",
+          "                const newExpiry = new Date(Date.now() + (minutes * 60 * 1000));",
+          "                pm.environment.set('tokenExpiry', newExpiry.toISOString());",
+          "                ",
+          "                console.log('Token refreshed successfully');",
+          "            } else {",
+          "                console.error('Token refresh failed:', err || response.code);",
+          "            }",
+          "        });",
+          "    }",
+          "}",
+          "",
+          "// Add request timestamp for debugging",
+          "pm.environment.set('requestTimestamp', new Date().toISOString());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global test script for common validations",
+          "",
+          "// Log request details for debugging",
+          "console.log(`${pm.request.method} ${pm.request.url} - Status: ${pm.response.code}`);",
+          "",
+          "// Common security header checks",
+          "pm.test('Security headers present', function () {",
+          "    pm.expect(pm.response.headers.has('X-Request-ID')).to.be.true;",
+          "});",
+          "",
+          "// Response time check",
+          "pm.test('Response time is acceptable', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});",
+          "",
+          "// Error response format validation",
+          "if (pm.response.code >= 400) {",
+          "    pm.test('Error response has proper structure', function () {",
+          "        const responseJson = pm.response.json();",
+          "        pm.expect(responseJson).to.have.property('error');",
+          "        pm.expect(responseJson).to.have.property('code');",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001/api",
+      "description": "Base URL for the API"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "description": "JWT access token for authentication"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "description": "Refresh token for token renewal"
+    },
+    {
+      "key": "tokenExpiry",
+      "value": "",
+      "description": "Token expiry timestamp"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "description": "Current user ID"
+    },
+    {
+      "key": "userType",
+      "value": "",
+      "description": "Current user type (physician/patient)"
+    },
+    {
+      "key": "testQuestionnaireId",
+      "value": "",
+      "description": "Test questionnaire ID for examples"
+    },
+    {
+      "key": "testResponseId",
+      "value": "",
+      "description": "Test response ID for examples"
+    },
+    {
+      "key": "testMediaId",
+      "value": "",
+      "description": "Test media file ID for examples"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "User authentication and session management endpoints",
+      "item": [
+        {
+          "name": "Login - Physician",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login successful', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const responseJson = pm.response.json();",
+                  "    pm.expect(responseJson.success).to.be.true;",
+                  "    pm.expect(responseJson).to.have.property('accessToken');",
+                  "});",
+                  "",
+                  "// Save tokens to environment",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    ",
+                  "    pm.environment.set('accessToken', responseData.accessToken);",
+                  "    pm.environment.set('userId', responseData.user.id);",
+                  "    pm.environment.set('userType', responseData.user.userType);",
+                  "    ",
+                  "    // Calculate token expiry",
+                  "    const expiresIn = responseData.expiresIn; // e.g., '30m'",
+                  "    const minutes = parseInt(expiresIn.replace('m', ''));",
+                  "    const expiry = new Date(Date.now() + (minutes * 60 * 1000));",
+                  "    pm.environment.set('tokenExpiry', expiry.toISOString());",
+                  "    ",
+                  "    console.log('Physician login successful, token saved');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"dr.smith@centralmedical.com\",\n  \"password\": \"DevPassword123!\",\n  \"userType\": \"physician\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login as a physician user to obtain access token"
+          }
+        },
+        {
+          "name": "Login - Patient",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login successful', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const responseJson = pm.response.json();",
+                  "    pm.expect(responseJson.success).to.be.true;",
+                  "    pm.expect(responseJson).to.have.property('accessToken');",
+                  "});",
+                  "",
+                  "// Save tokens to environment",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    ",
+                  "    pm.environment.set('accessToken', responseData.accessToken);",
+                  "    pm.environment.set('userId', responseData.user.id);",
+                  "    pm.environment.set('userType', responseData.user.userType);",
+                  "    ",
+                  "    // Calculate token expiry",
+                  "    const expiresIn = responseData.expiresIn;",
+                  "    const minutes = parseInt(expiresIn.replace('m', ''));",
+                  "    const expiry = new Date(Date.now() + (minutes * 60 * 1000));",
+                  "    pm.environment.set('tokenExpiry', expiry.toISOString());",
+                  "    ",
+                  "    console.log('Patient login successful, token saved');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"patient@example.com\",\n  \"password\": \"PatientPass123!\",\n  \"userType\": \"patient\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login as a patient user to obtain access token"
+          }
+        },
+        {
+          "name": "Login with MFA",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"dr.jones@centralmedical.com\",\n  \"password\": \"MfaPassword123!\",\n  \"userType\": \"physician\",\n  \"mfaCode\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login with MFA code (for accounts with MFA enabled)"
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    pm.environment.set('accessToken', responseData.accessToken);",
+                  "    ",
+                  "    // Update token expiry",
+                  "    const expiresIn = responseData.expiresIn;",
+                  "    const minutes = parseInt(expiresIn.replace('m', ''));",
+                  "    const expiry = new Date(Date.now() + (minutes * 60 * 1000));",
+                  "    pm.environment.set('tokenExpiry', expiry.toISOString());",
+                  "    ",
+                  "    console.log('Token refreshed successfully');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "refresh"]
+            },
+            "description": "Refresh expired access token using refresh token"
+          }
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Get information about the currently authenticated user"
+          }
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    // Clear environment variables",
+                  "    pm.environment.set('accessToken', '');",
+                  "    pm.environment.set('refreshToken', '');",
+                  "    pm.environment.set('tokenExpiry', '');",
+                  "    pm.environment.set('userId', '');",
+                  "    pm.environment.set('userType', '');",
+                  "    console.log('Logged out successfully, tokens cleared');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Logout current user and invalidate tokens"
+          }
+        },
+        {
+          "name": "Register Patient",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newpatient@example.com\",\n  \"password\": \"NewPatientPass123!\",\n  \"invitationToken\": \"a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6\",\n  \"userType\": \"patient\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Register a new patient account using invitation token"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Physician Portal",
+      "description": "Physician-specific endpoints for patient management and clinical oversight",
+      "item": [
+        {
+          "name": "Get Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/physicians/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "dashboard"]
+            },
+            "description": "Get physician dashboard with patient statistics and recent activity"
+          }
+        },
+        {
+          "name": "Get Dashboard Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/physicians/dashboard/stats?timeframe=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "dashboard", "stats"],
+              "query": [
+                {
+                  "key": "timeframe",
+                  "value": "30",
+                  "description": "Number of days for statistics"
+                }
+              ]
+            },
+            "description": "Get detailed dashboard statistics for specified timeframe"
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/physicians/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "profile"]
+            },
+            "description": "Get physician profile information"
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Smith\",\n  \"title\": \"Dr.\",\n  \"specialization\": \"Cardiology\",\n  \"licenseNumber\": \"MD123456\",\n  \"phone\": \"+1-555-0123\",\n  \"department\": \"Internal Medicine\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/physicians/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "profile"]
+            },
+            "description": "Update physician profile information"
+          }
+        },
+        {
+          "name": "Get Patients",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/physicians/patients?page=1&limit=10&status=active",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "patients"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "active"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Search by patient ID or email"
+                }
+              ]
+            },
+            "description": "Get paginated list of patients under physician's care"
+          }
+        },
+        {
+          "name": "Get Patient Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/physicians/patients/{{patientId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "patients", "{{patientId}}"]
+            },
+            "description": "Get detailed information about a specific patient"
+          }
+        },
+        {
+          "name": "Invite Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"newpatient@example.com\",\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Doe\",\n  \"studyId\": \"study-uuid-here\",\n  \"relationshipType\": \"primary_care\",\n  \"notes\": \"Patient enrolled in cardiac study\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/physicians/patients/invite",
+              "host": ["{{baseUrl}}"],
+              "path": ["physicians", "patients", "invite"]
+            },
+            "description": "Invite a new patient to join the platform"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patient Portal",
+      "description": "Patient-specific endpoints for profile management and questionnaire access",
+      "item": [
+        {
+          "name": "Get Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "dashboard"]
+            },
+            "description": "Get patient dashboard with questionnaires and activity overview"
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "profile"]
+            },
+            "description": "Get patient profile with decrypted personal information"
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Doe\",\n  \"phone\": \"+1-555-0456\",\n  \"address\": \"123 Main St, City, ST 12345\",\n  \"emergencyContact\": \"John Doe - Spouse - +1-555-0457\",\n  \"gender\": \"female\",\n  \"medicalHistory\": \"Hypertension, controlled with medication\",\n  \"medications\": \"Lisinopril 10mg daily\",\n  \"allergies\": \"Penicillin\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "profile"]
+            },
+            "description": "Update patient profile information (data is automatically encrypted)"
+          }
+        },
+        {
+          "name": "Get Available Questionnaires",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save first questionnaire ID for testing",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    if (responseData.questionnaires && responseData.questionnaires.length > 0) {",
+                  "        pm.environment.set('testQuestionnaireId', responseData.questionnaires[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/questionnaires",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "questionnaires"]
+            },
+            "description": "Get questionnaires assigned to the patient"
+          }
+        },
+        {
+          "name": "Get Questionnaire Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/questionnaires/{{testQuestionnaireId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "questionnaires", "{{testQuestionnaireId}}"]
+            },
+            "description": "Get detailed questionnaire with questions and any existing response"
+          }
+        },
+        {
+          "name": "Get My Responses",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save first response ID for testing",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    if (responseData.responses && responseData.responses.length > 0) {",
+                  "        pm.environment.set('testResponseId', responseData.responses[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/patients/responses?page=1&limit=10&status=completed",
+              "host": ["{{baseUrl}}"],
+              "path": ["patients", "responses"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "description": "Filter by response status"
+                }
+              ]
+            },
+            "description": "Get patient's response history"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Questionnaires",
+      "description": "Questionnaire creation, management, and access endpoints",
+      "item": [
+        {
+          "name": "Get Questionnaires",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save first questionnaire ID for testing",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    if (responseData.questionnaires && responseData.questionnaires.length > 0) {",
+                  "        pm.environment.set('testQuestionnaireId', responseData.questionnaires[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/questionnaires?page=1&limit=10&status=active&type=symptom_tracker",
+              "host": ["{{baseUrl}}"],
+              "path": ["questionnaires"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "active"
+                },
+                {
+                  "key": "type",
+                  "value": "symptom_tracker",
+                  "description": "Filter by questionnaire type"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Search in title and description"
+                }
+              ]
+            },
+            "description": "Get questionnaires (filtered by user permissions)"
+          }
+        },
+        {
+          "name": "Get Questionnaire Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/questionnaires/{{testQuestionnaireId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["questionnaires", "{{testQuestionnaireId}}"]
+            },
+            "description": "Get detailed questionnaire information with questions"
+          }
+        },
+        {
+          "name": "Create Questionnaire (Physician Only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save created questionnaire ID",
+                  "if (pm.response.code === 201) {",
+                  "    const responseData = pm.response.json();",
+                  "    pm.environment.set('testQuestionnaireId', responseData.questionnaire.id);",
+                  "    console.log('Created questionnaire ID:', responseData.questionnaire.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Daily Pain Assessment\",\n  \"description\": \"Track daily pain levels and medication effectiveness\",\n  \"version\": \"1.0\",\n  \"questionnaireType\": \"symptom_tracker\",\n  \"frequency\": \"daily\",\n  \"isRequired\": true,\n  \"estimatedTimeMinutes\": 5,\n  \"instructions\": \"Please answer all questions based on your experience in the last 24 hours.\",\n  \"questions\": [\n    {\n      \"id\": \"pain_level\",\n      \"type\": \"scale\",\n      \"text\": \"How would you rate your pain level today?\",\n      \"required\": true,\n      \"validation\": {\n        \"min\": 0,\n        \"max\": 10\n      }\n    },\n    {\n      \"id\": \"medication_taken\",\n      \"type\": \"boolean\",\n      \"text\": \"Did you take your prescribed medication today?\",\n      \"required\": true\n    },\n    {\n      \"id\": \"side_effects\",\n      \"type\": \"multiple_choice\",\n      \"text\": \"Did you experience any side effects? (Select all that apply)\",\n      \"required\": false,\n      \"options\": [\"Nausea\", \"Dizziness\", \"Fatigue\", \"Headache\", \"None\"]\n    },\n    {\n      \"id\": \"notes\",\n      \"type\": \"text\",\n      \"text\": \"Any additional notes about your condition today?\",\n      \"required\": false,\n      \"validation\": {\n        \"maxLength\": 500\n      }\n    }\n  ],\n  \"validationRules\": {\n    \"requireAllRequired\": true,\n    \"allowPartialSave\": true\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/questionnaires",
+              "host": ["{{baseUrl}}"],
+              "path": ["questionnaires"]
+            },
+            "description": "Create a new questionnaire (physicians only)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Responses",
+      "description": "Patient response creation, management, and review endpoints",
+      "item": [
+        {
+          "name": "Get Responses",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save first response ID for testing",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    if (responseData.responses && responseData.responses.length > 0) {",
+                  "        pm.environment.set('testResponseId', responseData.responses[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/responses?page=1&limit=10&status=completed",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "description": "Filter by response status"
+                },
+                {
+                  "key": "questionnaireId",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Filter by questionnaire"
+                },
+                {
+                  "key": "patientId",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Filter by patient (physicians only)"
+                }
+              ]
+            },
+            "description": "Get responses (filtered by user permissions)"
+          }
+        },
+        {
+          "name": "Get Response Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/responses/{{testResponseId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses", "{{testResponseId}}"]
+            },
+            "description": "Get detailed response information with decrypted data"
+          }
+        },
+        {
+          "name": "Create Response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save created response ID",
+                  "if (pm.response.code === 201) {",
+                  "    const responseData = pm.response.json();",
+                  "    pm.environment.set('testResponseId', responseData.response.id);",
+                  "    console.log('Created response ID:', responseData.response.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"questionnaireId\": \"{{testQuestionnaireId}}\",\n  \"questionnaireVersion\": \"1.0\",\n  \"status\": \"in_progress\",\n  \"responses\": {\n    \"pain_level\": 7,\n    \"medication_taken\": true,\n    \"side_effects\": [\"Nausea\", \"Fatigue\"],\n    \"notes\": \"Pain was worse after exercise this morning. Medication helped reduce it by afternoon.\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/responses",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses"]
+            },
+            "description": "Create a new response to a questionnaire (data is automatically encrypted)"
+          }
+        },
+        {
+          "name": "Update Response",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completed\",\n  \"responses\": {\n    \"pain_level\": 5,\n    \"medication_taken\": true,\n    \"side_effects\": [\"Fatigue\"],\n    \"notes\": \"Pain improved throughout the day. Only mild fatigue as side effect.\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/responses/{{testResponseId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses", "{{testResponseId}}"]
+            },
+            "description": "Update an existing response (only if not yet submitted)"
+          }
+        },
+        {
+          "name": "Submit Response",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/responses/{{testResponseId}}/submit",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses", "{{testResponseId}}", "submit"]
+            },
+            "description": "Submit response for physician review (locks response from further edits)"
+          }
+        },
+        {
+          "name": "Auto-Save Response",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"responses\": {\n    \"pain_level\": 6,\n    \"medication_taken\": true,\n    \"notes\": \"Work in progress...\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/responses/{{testResponseId}}/auto-save",
+              "host": ["{{baseUrl}}"],
+              "path": ["responses", "{{testResponseId}}", "auto-save"]
+            },
+            "description": "Auto-save response progress without changing status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Media Management",
+      "description": "File upload and management endpoints for media attachments",
+      "item": [
+        {
+          "name": "Upload Single File",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save uploaded file ID",
+                  "if (pm.response.code === 201) {",
+                  "    const responseData = pm.response.json();",
+                  "    pm.environment.set('testMediaId', responseData.file.id);",
+                  "    console.log('Uploaded file ID:', responseData.file.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Select a file to upload (image, video, audio, or document)"
+                },
+                {
+                  "key": "responseId",
+                  "value": "{{testResponseId}}",
+                  "description": "Associate with a response (optional)",
+                  "type": "text"
+                },
+                {
+                  "key": "tags",
+                  "value": "symptom,photo,test",
+                  "description": "Comma-separated tags",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Test file upload from Postman",
+                  "description": "File description",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/media/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "upload"]
+            },
+            "description": "Upload a single media file with virus scanning and processing"
+          }
+        },
+        {
+          "name": "Upload Multiple Files",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Select multiple files (max 5)"
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Second file"
+                },
+                {
+                  "key": "responseId",
+                  "value": "{{testResponseId}}",
+                  "description": "Associate with a response (optional)",
+                  "type": "text"
+                },
+                {
+                  "key": "tags",
+                  "value": "batch,upload,test",
+                  "description": "Tags for all files",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Batch file upload from Postman",
+                  "description": "Description for all files",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/media/upload-multiple",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "upload-multiple"]
+            },
+            "description": "Upload multiple files in a single request (maximum 5 files)"
+          }
+        },
+        {
+          "name": "Get Media Files",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Save first media ID for testing",
+                  "if (pm.response.code === 200) {",
+                  "    const responseData = pm.response.json();",
+                  "    if (responseData.media && responseData.media.length > 0) {",
+                  "        pm.environment.set('testMediaId', responseData.media[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media?page=1&limit=10&fileType=image&status=completed",
+              "host": ["{{baseUrl}}"],
+              "path": ["media"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "fileType",
+                  "value": "image",
+                  "description": "Filter by file type (image, video, audio, document)"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "description": "Filter by processing status"
+                },
+                {
+                  "key": "responseId",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Filter by associated response"
+                }
+              ]
+            },
+            "description": "Get media files accessible to the current user"
+          }
+        },
+        {
+          "name": "Get Media Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}"]
+            },
+            "description": "Get detailed information about a specific media file"
+          }
+        },
+        {
+          "name": "Download File",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}/download",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}", "download"]
+            },
+            "description": "Download the actual media file content (after virus scan verification)"
+          }
+        },
+        {
+          "name": "Get File Thumbnail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}/thumbnail",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}", "thumbnail"]
+            },
+            "description": "Get thumbnail for image/video files"
+          }
+        },
+        {
+          "name": "Get File Metadata",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}/metadata",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}", "metadata"]
+            },
+            "description": "Get detailed metadata about the file"
+          }
+        },
+        {
+          "name": "Get Virus Scan Result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}/virus-scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}", "virus-scan"]
+            },
+            "description": "Get virus scan results for the file"
+          }
+        },
+        {
+          "name": "Delete File",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{testMediaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["media", "{{testMediaId}}"]
+            },
+            "description": "Delete a media file (cannot be undone)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health & System",
+      "description": "System health and API information endpoints",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/../health",
+              "host": ["{{baseUrl}}"],
+              "path": ["..", "health"]
+            },
+            "description": "Check API server health and status"
+          }
+        },
+        {
+          "name": "API Information",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}",
+              "host": ["{{baseUrl}}"]
+            },
+            "description": "Get API information and available endpoints"
+          }
+        }
+      ]
+    }
+  ]
+}
